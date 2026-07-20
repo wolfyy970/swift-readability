@@ -37,7 +37,7 @@ Add SwiftReadability with Swift Package Manager:
 ```swift
 .package(
     url: "https://github.com/wolfyy970/swift-readability.git",
-    from: "0.3.1"
+    from: "0.3.2"
 )
 ```
 
