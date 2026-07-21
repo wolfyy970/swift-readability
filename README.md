@@ -91,7 +91,7 @@ Add SwiftReadability to `Package.swift`:
 ```swift
 .package(
     url: "https://github.com/wolfyy970/swift-readability.git",
-    .upToNextMinor(from: "0.3.2")
+    .upToNextMinor(from: "0.3.3")
 )
 ```
 
@@ -103,7 +103,7 @@ Then add the native product to your application target:
 
 SwiftReadability is pre-1.0. The range above accepts patch releases in the 0.3
 line without automatically admitting a potentially breaking 0.4 release. Use
-`exact: "0.3.2"` when reproducible extraction output matters more than
+`exact: "0.3.3"` when reproducible extraction output matters more than
 automatically receiving fixes.
 
 The optional `SwiftReadabilityJavaScriptReference` product exists for
