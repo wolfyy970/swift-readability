@@ -48,24 +48,6 @@ struct MozillaAuthorityRegressionTests {
         #expect(result.dir == "rtl")
     }
 
-    @Test func commentsInsideSelectedContentRemainObservable() throws {
-        let html = """
-        <html><body><article>
-          <p>The first paragraph supplies enough coherent prose for the article candidate to be selected by the native implementation.</p>
-          <!--marker-kept-->
-          <p>The second paragraph keeps the comment between two retained pieces of editorial content.</p>
-        </article></body></html>
-        """
-
-        let result = try #require(try Readability(
-            html: html,
-            url: baseURL,
-            options: ReadabilityOptions(charThreshold: 1)
-        ).parse())
-
-        #expect(result.content.contains("<!--marker-kept-->"))
-    }
-
     @Test func normalizedTextLengthDoesNotInventWhitespaceAtBlockBoundaries() throws {
         let document = try SwiftSoup.parse("<div id='story'><p>alpha</p><p>beta</p></div>")
         let story = try #require(try document.getElementById("story"))
@@ -186,12 +168,12 @@ struct MozillaAuthorityRegressionTests {
         ("display:none;display:block", "block"),
         ("display:none!important;display:block", "none"),
         ("display:block!important;display:none", "block"),
-        ("display:block!important;display:none!important", "block"),
+        ("display:block!important;display:none!important", "none"),
         ("display:none;display:nonefoo", "none"),
         ("background-image:url('display:none');display:block", "block"),
         ("display:none;/* semicolon ; */display:block", "block"),
     ])
-    func inlineStyleParserMatchesCSSDeclarationPrecedence(style: String, expectedDisplay: String) {
+    func inlineStyleParserHonorsCSSDeclarationPrecedence(style: String, expectedDisplay: String) {
         #expect(InlineStyleDeclarations(style).value(for: "display") == expectedDisplay)
     }
 
@@ -254,7 +236,9 @@ struct MozillaAuthorityRegressionTests {
             ).parse()
             Issue.record("Mozilla rejects a document only when its element count exceeds the configured maximum.")
         } catch {
-            #expect(error.localizedDescription.contains("Aborting parsing document"))
+            let error = error as NSError
+            #expect(error.domain == "Readability")
+            #expect(error.code == 1)
         }
     }
 

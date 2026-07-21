@@ -186,21 +186,11 @@ final class MetadataParser: ProcessorBase {
         var datePublished: String?
     }
 
-    private enum JSONLDArticleSearch {
-        case match([String: Any])
-        case noMatch
-        case invalidScript
-    }
-
     private func getJSONLDMetadata(_ document: Document) -> JSONLDMetadata {
-        // Mozilla enumerates all script elements and performs exact equality on
-        // the type attribute. SwiftSoup's CSS attribute equality is deliberately
-        // case-insensitive and trims its operand, so a selector here would accept
-        // inputs that the pinned JavaScript authority rejects.
         guard let scripts = try? document.getElementsByTag("script") else { return JSONLDMetadata() }
 
         for script in scripts {
-            guard script.attrOrEmpty("type") == "application/ld+json" else { continue }
+            guard isJSONLDMIMEType(script.attrOrEmpty("type")) else { continue }
 
             let content = strippingJSONLDCDATAMarkers(from: script.data())
 
@@ -210,12 +200,11 @@ final class MetadataParser: ProcessorBase {
             // If JSON-LD is an array, find an entry with a supported @type.
             var candidate: [String: Any]
             if let array = parsed as? [Any] {
-                switch firstJSONLDArticle(in: array) {
-                case let .match(found):
-                    candidate = found
-                case .noMatch, .invalidScript:
-                    continue
-                }
+                guard let found = firstJSONLDArticle(
+                    in: array,
+                    requiringOwnSchemaContext: true
+                ) else { continue }
+                candidate = found
             } else if let dict = parsed as? [String: Any] {
                 candidate = dict
             } else {
@@ -223,33 +212,21 @@ final class MetadataParser: ProcessorBase {
             }
 
             // Validate schema.org context.
-            let contextMatches: Bool = {
-                guard let ctx = candidate["@context"] else { return false }
-                if let ctxStr = ctx as? String {
-                    return schemaContextMatches(ctxStr)
-                }
-                if let ctxDict = ctx as? [String: Any],
-                   let vocab = ctxDict["@vocab"] as? String {
-                    return schemaContextMatches(vocab)
-                }
-                return false
-            }()
-            if !contextMatches { continue }
+            guard let context = candidate["@context"], schemaContextMatches(context) else { continue }
 
-            // If no @type but has @graph, search graph for a supported @type.
-            if !javaScriptJSONValueIsTruthy(candidate["@type"]),
+            // Graph containers sometimes carry their own unrelated or malformed
+            // type. Prefer a supported article child when the container itself is
+            // not an article.
+            if articleType(in: candidate) == nil,
                let graph = candidate["@graph"] as? [Any] {
-                switch firstJSONLDArticle(in: graph) {
-                case let .match(graphObject):
-                    candidate = graphObject
-                case .noMatch, .invalidScript:
-                    continue
-                }
+                guard let graphObject = firstJSONLDArticle(
+                    in: graph,
+                    inheritingSchemaContext: true
+                ) else { continue }
+                candidate = graphObject
             }
 
-            guard javaScriptJSONValueIsTruthy(candidate["@type"]),
-                  let typeValue = candidate["@type"] as? String,
-                  matchesType(typeValue) else { continue }
+            guard articleType(in: candidate) != nil else { continue }
 
             var meta = JSONLDMetadata()
 
@@ -275,15 +252,11 @@ final class MetadataParser: ProcessorBase {
                 if let authorDict = author as? [String: Any],
                    let authorName = authorDict["name"] as? String {
                     meta.byline = javaScriptTrim(authorName)
-                } else if let authorArray = author as? [Any],
-                          let firstAuthor = authorArray.first as? [String: Any],
-                          firstAuthor["name"] is String {
-                    // This first-element gate is observable Mozilla behavior:
-                    // malformed leading entries make the whole array ineligible,
-                    // even when a later entry has a valid name.
+                } else if let authorArray = author as? [Any] {
                     let names = authorArray
                         .compactMap { ($0 as? [String: Any])?["name"] as? String }
                         .map(javaScriptTrim(_:))
+                        .filter { !$0.isEmpty }
                     if !names.isEmpty {
                         meta.byline = names.joined(separator: ", ")
                     }
@@ -329,42 +302,39 @@ final class MetadataParser: ProcessorBase {
         return JSONLDMetadata()
     }
 
-    /// Mirrors the ordered `.find` callback in Mozilla `_getJSONLD`.
-    /// JSON `null` throws on property access in JavaScript; a truthy non-string
-    /// `@type` throws when `.match` is invoked. Either exception rejects the
-    /// current script instead of allowing a later array entry to win.
-    private func firstJSONLDArticle(in values: [Any]) -> JSONLDArticleSearch {
+    /// Finds the first supported article object without letting malformed
+    /// siblings discard otherwise valid metadata from the same JSON-LD block.
+    private func firstJSONLDArticle(
+        in values: [Any],
+        requiringOwnSchemaContext: Bool = false,
+        inheritingSchemaContext: Bool = false
+    ) -> [String: Any]? {
         for value in values {
-            if value is NSNull {
-                return .invalidScript
-            }
-            guard let dictionary = value as? [String: Any] else {
-                // Property access on other JSON primitives and arrays yields an
-                // absent @type, which is falsey and lets `.find` continue.
+            guard let dictionary = value as? [String: Any],
+                  articleType(in: dictionary) != nil else { continue }
+            if let context = dictionary["@context"] {
+                let inheritedState: Bool? = inheritingSchemaContext ? true : nil
+                guard effectiveSchemaContext(after: context, current: inheritedState) == true else {
+                    continue
+                }
+            } else if requiringOwnSchemaContext {
                 continue
             }
-            let type = dictionary["@type"]
-            guard javaScriptJSONValueIsTruthy(type) else { continue }
-            guard let typeString = type as? String else {
-                return .invalidScript
-            }
-            if matchesType(typeString) {
-                return .match(dictionary)
-            }
+            return dictionary
         }
-        return .noMatch
+        return nil
     }
 
-    private func javaScriptJSONValueIsTruthy(_ value: Any?) -> Bool {
-        guard let value, !(value is NSNull) else { return false }
-        if let boolean = value as? Bool { return boolean }
-        if let string = value as? String { return !string.isEmpty }
-        if let number = value as? NSNumber {
-            let double = number.doubleValue
-            return double != 0 && !double.isNaN
+    private func articleType(in value: [String: Any]) -> String? {
+        if let type = value["@type"] as? String {
+            return matchesType(type) ? type : nil
         }
-        // Objects and arrays are truthy, including empty ones.
-        return true
+        if let types = value["@type"] as? [Any] {
+            return types.lazy
+                .compactMap { $0 as? String }
+                .first(where: matchesType(_:))
+        }
+        return nil
     }
 
     private func matchesType(_ typeValue: String) -> Bool {
@@ -373,11 +343,63 @@ final class MetadataParser: ProcessorBase {
             typeValue.hasSuffix("APIReference")
     }
 
+    private func isJSONLDMIMEType(_ value: String) -> Bool {
+        let trimmed = javaScriptTrim(value)
+        let essence = trimmed.split(
+            separator: ";",
+            maxSplits: 1,
+            omittingEmptySubsequences: false
+        )[0]
+        let scalars = Array(javaScriptTrim(String(essence)).unicodeScalars)
+        return endOfASCIICaseInsensitiveMatch(
+            "application/ld+json",
+            in: scalars,
+            at: 0
+        ) == scalars.count
+    }
+
+    private func schemaContextMatches(_ value: Any) -> Bool {
+        effectiveSchemaContext(after: value, current: nil) == true
+    }
+
+    /// JSON-LD context arrays are ordered: a later remote context or `@vocab`
+    /// replaces the earlier vocabulary, while unrelated context-object terms
+    /// leave it unchanged.
+    private func effectiveSchemaContext(after value: Any, current: Bool?) -> Bool? {
+        if let string = value as? String {
+            return schemaContextMatches(string)
+        }
+        if value is NSNull {
+            return false
+        }
+        if let dictionary = value as? [String: Any] {
+            guard let vocabulary = dictionary["@vocab"] else { return current }
+            guard let vocabulary = vocabulary as? String else { return false }
+            return schemaContextMatches(vocabulary)
+        }
+        if let array = value as? [Any] {
+            var state = current
+            for entry in array {
+                state = effectiveSchemaContext(after: entry, current: state)
+            }
+            return state
+        }
+        // Tolerate malformed neighboring entries without allowing them to
+        // manufacture or replace affirmative Schema.org evidence.
+        return current
+    }
+
     private func schemaContextMatches(_ value: String) -> Bool {
-        value == "http://schema.org" ||
-            value == "http://schema.org/" ||
-            value == "https://schema.org" ||
-            value == "https://schema.org/"
+        guard let url = WebURL(value),
+              url.scheme == "http" || url.scheme == "https",
+              url.hostname == "schema.org",
+              url.username == nil,
+              url.password == nil,
+              url.port == nil,
+              url.path == "/",
+              url.query == nil,
+              url.fragment == nil else { return false }
+        return true
     }
 
     // MARK: - Helpers
@@ -656,7 +678,7 @@ final class MetadataParser: ProcessorBase {
     /// would incorrectly discard U+0085, among other observable characters.
     private func htmlDocumentTitle(_ document: Document) -> String {
         guard let titleElements = try? document.getElementsByTag("title"),
-              let titleElement = titleElements.first() else {
+              let titleElement = titleElements.first(where: { !isInsideDiagramOrFormula($0) }) else {
             return ""
         }
 
@@ -679,6 +701,20 @@ final class MetadataParser: ProcessorBase {
         }
 
         return String(result)
+    }
+
+    /// Diagram labels are useful content but poor article-title candidates,
+    /// including when they sit below an HTML integration point such as SVG
+    /// `foreignObject`. Generic XML receives best-effort raw-tag behavior only.
+    private func isInsideDiagramOrFormula(_ element: Element) -> Bool {
+        var ancestor = element.parent()
+        while let current = ancestor {
+            switch current.tagName().lowercased() {
+            case "svg", "math": return true
+            default: ancestor = current.parent()
+            }
+        }
+        return false
     }
 
     // MARK: - Title extraction (Readability.js _getArticleTitle)

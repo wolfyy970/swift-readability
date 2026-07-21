@@ -90,9 +90,8 @@ class ProcessorBase {
     }
 }
 
-/// Mozilla's `_nextNode` skips any non-element whose `textContent` matches its
-/// whitespace expression. Comments are observable here: unlike an element's
-/// aggregate `textContent`, a Comment node's own `textContent` is its data.
+/// Mozilla's `_nextNode` skips text and raw-data nodes whose content matches its
+/// whitespace expression. DOM comments are removed before preprocessing.
 func isMozillaWhitespaceNonElementNode(_ node: Node, regEx: RegExUtil) -> Bool {
     if node is Element { return false }
     if let text = node as? TextNode {
@@ -100,9 +99,6 @@ func isMozillaWhitespaceNonElementNode(_ node: Node, regEx: RegExUtil) -> Bool {
     }
     if let data = node as? DataNode {
         return regEx.isWhitespace(data.getWholeData())
-    }
-    if let comment = node as? Comment {
-        return regEx.isWhitespace(comment.getData())
     }
     // For example, DocumentType.textContent is null in the browser. JavaScript
     // coerces that null to "null" for RegExp.test, so it must not be skipped.

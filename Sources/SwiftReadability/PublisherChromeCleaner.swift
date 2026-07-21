@@ -136,7 +136,7 @@ final class PublisherChromeCleaner: ProcessorBase {
         wrapper.children().count == 1,
         !wrapper.getChildNodes().contains(where: { node in
           guard let text = node as? TextNode else { return false }
-          return regEx.hasContent(text.getWholeText())
+          return !regEx.isWhitespace(text.getWholeText())
         }),
         let onlyChild = wrapper.children().firstSafe
       else { continue }

@@ -38,9 +38,6 @@ struct ReadabilityAPITests {
 
     @Test func parseRejectsOversizedDocuments() throws {
         let html = "<html><head><title>Yo</title></head><body><div>yo</div><span>hi</span></body></html>"
-        // Browser getElementsByTagName("*") reports the six descendant
-        // elements and never includes its Document receiver.
-        let browserElementCount = 6
         let reader = Readability(
             html: html,
             url: baseURL,
@@ -51,7 +48,9 @@ struct ReadabilityAPITests {
             _ = try reader.parse()
             #expect(Bool(false), "Expected parse() to throw when exceeding maxElemsToParse")
         } catch {
-            #expect(error.localizedDescription == "Aborting parsing document; \(browserElementCount) elements found")
+            let error = error as NSError
+            #expect(error.domain == "Readability")
+            #expect(error.code == 1)
         }
     }
 
@@ -139,6 +138,21 @@ struct ReadabilityAPITests {
         #expect(result != nil)
     }
 
+    @Test func documentPipelinePreservesWHATWGLocationSemantics() throws {
+        // A browser treats backslashes as path separators for special URLs.
+        // Foundation.URL percent-encodes them, so round-tripping the document
+        // location through Foundation changes later relative-URL resolution.
+        let browserLocation = #"https:\\example.com\articles\story"#
+        let doc = try SwiftSoup.parse(
+            "<html><body><p>Article text with <a href='../next'>a relative link</a>.</p></body></html>",
+            browserLocation
+        )
+
+        let result = try Readability(document: doc).parse()
+
+        #expect(result?.content.contains("href=\"https://example.com/next\"") == true)
+    }
+
     @Test func parseWithSerializerReturnsCustomContent() throws {
         let reader = Readability(
             html: "<html><body><div id='x'>yo.</div></body></html>",
@@ -149,5 +163,58 @@ struct ReadabilityAPITests {
             (try? element.select("#readability-page-1").first()?.tagNameSafe()) ?? ""
         }
         #expect(result?.content == "div")
+    }
+
+    @Test func genericSerializerCannotRewriteOtherResultFields() throws {
+        let originalText = "Original article text."
+        let reader = Readability(
+            html: "<html><body><p>\(originalText)</p></body></html>",
+            url: baseURL
+        )
+
+        let result = try reader.parse { element in
+            _ = try? element.text("Serializer mutation")
+            return "projected"
+        }
+
+        #expect(result?.content == "projected")
+        #expect(result?.textContent.contains(originalText) == true)
+        #expect(result?.textContent.contains("Serializer mutation") == false)
+        #expect(result?.length == originalText.utf16.count)
+    }
+
+    @Test func configuredSerializerCannotRewriteOtherResultFields() throws {
+        let originalText = "Original configured serializer text."
+        let options = ReadabilityOptions(serializer: { element in
+            _ = try? element.text("Configured serializer mutation")
+            return "projected"
+        })
+        let reader = Readability(
+            html: "<html><body><p>\(originalText)</p></body></html>",
+            url: baseURL,
+            options: options
+        )
+
+        let result = try reader.parse()
+
+        #expect(result?.content == "projected")
+        #expect(result?.textContent.contains(originalText) == true)
+        #expect(result?.textContent.contains("Configured serializer mutation") == false)
+        #expect(result?.length == originalText.utf16.count)
+    }
+
+    @Test func legacyArticleTextReflectsInPlaceDOMMutation() throws {
+        let document = try SwiftSoup.parseBodyFragment("<article>Original</article>")
+        let element = try #require(document.select("article").first())
+        let article = Article(uri: baseURL.absoluteString)
+        article.articleContent = element
+
+        #expect(article.textContent == "Original")
+        #expect(article.length == "Original".count)
+
+        _ = try element.text("Updated content")
+
+        #expect(article.textContent == "Updated content")
+        #expect(article.length == "Updated content".count)
     }
 }

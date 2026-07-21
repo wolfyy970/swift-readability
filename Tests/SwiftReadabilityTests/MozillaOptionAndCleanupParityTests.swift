@@ -33,12 +33,11 @@ struct MozillaOptionAndCleanupParityTests {
         #expect(nan?.textContent == zero?.textContent)
     }
 
-    @Test func ariaModalAndUnlikelyRolesAreCaseSensitive() throws {
-        let marker = "Uppercase role values are not equal to Mozilla's lowercase role tokens and must remain available to extraction."
+    @Test func ariaModalAndUnlikelyRolesMatchASCIICaseInsensitively() throws {
         let html = """
         <html><body><article>
-          <section aria-modal="true" role="DIALOG"><p>\(marker)</p></section>
-          <section role="NAVIGATION"><p>Uppercase navigation is likewise not an exact unlikely-role match.</p></section>
+          <section aria-modal="TrUe" role="DiAlOg"><p>MODAL_CHROME_MARKER must not enter the readable article.</p></section>
+          <section role="NAVIGATION"><p>NAVIGATION_CHROME_MARKER must not enter the readable article.</p></section>
           <p>A final ordinary paragraph makes the complete article a stable selection candidate.</p>
         </article></body></html>
         """
@@ -49,8 +48,68 @@ struct MozillaOptionAndCleanupParityTests {
             options: ReadabilityOptions(charThreshold: 1)
         ).parse())
 
-        #expect(result.textContent.contains(marker))
-        #expect(result.textContent.contains("Uppercase navigation"))
+        #expect(!result.textContent.contains("MODAL_CHROME_MARKER"))
+        #expect(!result.textContent.contains("NAVIGATION_CHROME_MARKER"))
+        #expect(result.textContent.contains("final ordinary paragraph"))
+    }
+
+    @Test func ariaModalCaseFoldingStillAppliesDuringRecallRetries() throws {
+        let html = """
+        <html><body><article>
+          <section aria-modal="TRUE" role="DIALOG"><p>RETRY_MODAL_CHROME_MARKER must not enter the readable article.</p></section>
+          <p>An ordinary visible paragraph remains readable while a deliberately high threshold exercises every extraction retry.</p>
+        </article></body></html>
+        """
+
+        let result = try #require(try Readability(
+            html: html,
+            url: baseURL,
+            options: ReadabilityOptions(charThreshold: 10_000)
+        ).parse())
+
+        #expect(!result.textContent.contains("RETRY_MODAL_CHROME_MARKER"))
+        #expect(result.textContent.contains("ordinary visible paragraph"))
+    }
+
+    @Test func ariaAndRoleMatchingPreservesLookalikeValues() throws {
+        let html = """
+        <html><body><article>
+          <section aria-modal="truthy" role="dialogue"><p>DIALOGUE_PROSE_MARKER is ordinary readable prose despite a role value that merely resembles dialog.</p></section>
+          <section role="navigation-main"><p>NAVIGATION_MAIN_PROSE_MARKER is ordinary readable prose despite a role value that merely resembles navigation.</p></section>
+          <p>A final ordinary paragraph makes the complete article a stable selection candidate.</p>
+        </article></body></html>
+        """
+
+        let result = try #require(try Readability(
+            html: html,
+            url: baseURL,
+            options: ReadabilityOptions(charThreshold: 1)
+        ).parse())
+
+        #expect(result.textContent.contains("DIALOGUE_PROSE_MARKER"))
+        #expect(result.textContent.contains("NAVIGATION_MAIN_PROSE_MARKER"))
+    }
+
+    @Test func presentationTableRoleMatchesCaseWithoutMatchingLookalikesOrFallbackLists() throws {
+        let html = """
+        <html><body><article>
+          <p>A stable article paragraph surrounds several short tables so their explicit roles control conditional cleanup.</p>
+          <table role="PRESENTATION" summary="Layout navigation"><tr><th><a href="/layout">PRESENTATION_LAYOUT_CHROME</a></th></tr></table>
+          <table role="presentationish" summary="Real tabular data"><tr><th>LOOKALIKE_DATA_MARKER</th><td>42</td></tr></table>
+          <table role="table presentation" summary="Real tabular data"><tr><th>LEADING_TABLE_ROLE_MARKER</th><td>43</td></tr></table>
+          <p>A second ordinary paragraph keeps extraction deterministic after the layout table is removed.</p>
+        </article></body></html>
+        """
+
+        let result = try #require(try Readability(
+            html: html,
+            url: baseURL,
+            options: ReadabilityOptions(charThreshold: 1)
+        ).parse())
+
+        #expect(!result.textContent.contains("PRESENTATION_LAYOUT_CHROME"))
+        #expect(result.textContent.contains("LOOKALIKE_DATA_MARKER"))
+        #expect(result.textContent.contains("LEADING_TABLE_ROLE_MARKER"))
     }
 
     @Test func iframeInnerHTMLDoesNotSatisfyTheVideoAllowlist() throws {

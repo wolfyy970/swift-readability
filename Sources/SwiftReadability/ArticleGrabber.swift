@@ -146,6 +146,7 @@ final class ArticleGrabber: ProcessorBase {
     )
 
     private let regEx: RegExUtil
+    private let contentNamespaces = ArticleContentNamespaceResolver()
     private let extensions: ReadabilityExtensions
     private let publisherChromeCleaner: PublisherChromeCleaner
 
@@ -183,6 +184,7 @@ final class ArticleGrabber: ProcessorBase {
         articleLang = nil
         readabilityObjects.removeAll(keepingCapacity: true)
         readabilityDataTable.removeAll(keepingCapacity: true)
+        contentNamespaces.reset()
 
         var options = options
         // Mozilla calls `_grabArticle()` with an omitted argument. JavaScript's
@@ -279,6 +281,7 @@ final class ArticleGrabber: ProcessorBase {
                 preserveStableReadabilityStateForRetry(page: page)
                 readabilityDataTable.removeAll(keepingCapacity: true)
                 textLengthCache.removeAll(keepingCapacity: true)
+                contentNamespaces.reset()
 
                 if options.stripUnlikelyCandidates {
                     options.stripUnlikelyCandidates = false
@@ -355,7 +358,8 @@ final class ArticleGrabber: ProcessorBase {
                     ? String(decoding: current.attrOrEmptyUTF8(ReadabilityUTF8Arrays.lang), as: UTF8.self)
                     : nil
             }
-            let matchString = current.classNameSafe() + " " + current.idSafe()
+            let scoringSignals = contentNamespaces.scoringSignals(current)
+            let matchString = scoringSignals.className + " " + scoringSignals.id
 
             let isVisible = measured("grab.prepareNodes.visibility", by: timing) {
                 isProbablyVisible(current)
@@ -368,8 +372,8 @@ final class ArticleGrabber: ProcessorBase {
             // aria-modal + role=dialog content isn't visible to the user.
             let ariaModal = current.attrOrEmptyUTF8(ReadabilityUTF8Arrays.ariaModal)
             let role = current.attrOrEmptyUTF8(ReadabilityUTF8Arrays.role)
-            if ariaModal == ReadabilityUTF8Arrays.true_,
-               role == ReadabilityUTF8Arrays.dialog {
+            if ariaModal.equalsIgnoreCaseASCII(ReadabilityUTF8Arrays.true_),
+               role.equalsIgnoreCaseASCII(ReadabilityUTF8Arrays.dialog) {
                 node = removeAndGetNext(node: current)
                 continue
             }
@@ -408,7 +412,7 @@ final class ArticleGrabber: ProcessorBase {
                     continue
                 }
 
-                if unlikelyRoles.contains(role) {
+                if unlikelyRoles.contains(where: { role.equalsIgnoreCaseASCII($0) }) {
                     node = removeAndGetNext(node: current)
                     continue
                 }
@@ -562,7 +566,7 @@ final class ArticleGrabber: ProcessorBase {
 
     private func isProbablyVisible(_ node: Element) -> Bool {
         let style = String(decoding: node.attrOrEmptyUTF8(ReadabilityUTF8Arrays.style), as: UTF8.self)
-        if browserDOMExposesStyleProperty(node), !style.isEmpty {
+        if !style.isEmpty {
             let declarations = InlineStyleDeclarations(style)
             if declarations.value(for: "display") == "none" { return false }
             if declarations.value(for: "visibility") == "hidden" { return false }
@@ -571,8 +575,9 @@ final class ArticleGrabber: ProcessorBase {
             return false
         }
         if node.hasAttr(ReadabilityUTF8Arrays.ariaHidden),
-           node.attrOrEmptyUTF8(ReadabilityUTF8Arrays.ariaHidden) == ReadabilityUTF8Arrays.true_ {
-            if !browserDOMClassNameIncludes(node, "fallback-image") {
+           node.attrOrEmptyUTF8(ReadabilityUTF8Arrays.ariaHidden)
+            .equalsIgnoreCaseASCII(ReadabilityUTF8Arrays.true_) {
+            if !node.classNameSafe().contains("fallback-image") {
                 return false
             }
         }
@@ -689,7 +694,7 @@ final class ArticleGrabber: ProcessorBase {
         let child = element.child(0)
         guard child.tagNameUTF8() == ReadabilityUTF8Arrays.p else { return false }
         for node in element.getChildNodes() {
-            if let text = node as? TextNode, regEx.hasContent(text.getWholeText()) {
+            if let text = node as? TextNode, !regEx.isWhitespace(text.getWholeText()) {
                 return false
             }
         }
@@ -805,12 +810,13 @@ final class ArticleGrabber: ProcessorBase {
     private func getClassWeight(e: Element, options: ArticleGrabberOptions) -> Int {
         if options.weightClasses == false { return 0 }
         var weight = 0
-        let className = e.classNameSafe()
+        let scoringSignals = contentNamespaces.scoringSignals(e)
+        let className = scoringSignals.className
         if !className.isEmpty {
             if regEx.isNegative(className) { weight -= 25 }
             if regEx.isPositive(className) { weight += 25 }
         }
-        let id = e.idSafe()
+        let id = scoringSignals.id
         if !id.isEmpty {
             if regEx.isNegative(id) { weight -= 25 }
             if regEx.isPositive(id) { weight += 25 }
@@ -1009,7 +1015,6 @@ final class ArticleGrabber: ProcessorBase {
 
         let siblingScoreThreshold = max(10.0, topReadability.contentScore * 0.2)
         let siblings = topCandidate.parent()?.children() ?? Elements()
-        let topClassName = topCandidate.classNameSafe()
         for sibling in Array(siblings) {
             var append = false
             let siblingReadability = getReadabilityObject(element: sibling)
@@ -1017,8 +1022,7 @@ final class ArticleGrabber: ProcessorBase {
                 append = true
             } else {
                 var contentBonus = 0.0
-                let siblingClassName = sibling.classNameSafe()
-                if siblingClassName == topClassName, !topClassName.isEmpty {
+                if contentNamespaces.classNamesMatchForSiblingBonus(sibling, topCandidate) {
                     contentBonus += topReadability.contentScore * 0.2
                 }
                 if let sr = siblingReadability,
@@ -1224,7 +1228,7 @@ final class ArticleGrabber: ProcessorBase {
         else { return false }
 
         for node in element.getChildNodes() {
-            if let text = node as? TextNode, regEx.hasContent(text.getWholeText()) {
+            if let text = node as? TextNode, !regEx.isWhitespace(text.getWholeText()) {
                 return false
             }
         }
@@ -1352,7 +1356,7 @@ final class ArticleGrabber: ProcessorBase {
         guard let tables = try? root.getElementsByTag("table") else { return }
         for table in tables {
             let role = (try? table.attr(ReadabilityUTF8Arrays.role)) ?? []
-            if role == ReadabilityUTF8Arrays.presentation { setReadabilityDataTable(table: table, value: false); continue }
+            if role.equalsIgnoreCaseASCII(ReadabilityUTF8Arrays.presentation) { setReadabilityDataTable(table: table, value: false); continue }
             let datatable = (try? table.attr(ReadabilityUTF8Arrays.datatable)) ?? []
             if datatable.equalsIgnoreCaseASCII(ReadabilityUTF8Arrays.zero) { setReadabilityDataTable(table: table, value: false); continue }
             let summary = (try? table.attr(ReadabilityUTF8Arrays.summary)) ?? []
@@ -1499,15 +1503,7 @@ final class ArticleGrabber: ProcessorBase {
                 }
                 if let embeds {
                     for embed in embeds {
-                        if let attrs = embed.getAttributes()?.asList() {
-                            for attr in attrs {
-                                let value = String(decoding: attr.getValueUTF8(), as: UTF8.self)
-                                if self.regEx.isVideo(value) {
-                                    return false
-                                }
-                            }
-                        }
-                        if browserDOMTagName(embed, equals: "object"), self.regEx.isVideo((try? embed.html()) ?? "") {
+                        if self.isAllowlistedVideoEmbed(embed) {
                             return false
                         }
                         embedCount += 1
@@ -1659,22 +1655,66 @@ final class ArticleGrabber: ProcessorBase {
         return count
     }
 
+    /// Retain executable media only when its source carries positive allowlist
+    /// evidence. Fallback prose, links, labels, and unrelated attributes do not
+    /// establish that the executable payload itself is trusted.
+    private func isAllowlistedVideoEmbed(_ element: Element) -> Bool {
+        let tag = element.tagNameUTF8()
+
+        if tag == ReadabilityUTF8Arrays.object {
+            let data = element.attrOrEmptyUTF8(ReadabilityUTF8Arrays.data)
+            if !data.isEmpty {
+                return regEx.isVideo(String(decoding: data, as: UTF8.self))
+            }
+
+            if let parameters = try? element.select("param[value]") {
+                for parameter in parameters {
+                    let value = parameter.attrOrEmptyUTF8(ReadabilityUTF8Arrays.value)
+                    if regEx.isVideo(String(decoding: value, as: UTF8.self)) {
+                        return true
+                    }
+                }
+            }
+            if let nestedEmbeds = try? element.select("embed[src]") {
+                for nestedEmbed in nestedEmbeds {
+                    let source = nestedEmbed.attrOrEmptyUTF8(ReadabilityUTF8Arrays.src)
+                    if regEx.isVideo(String(decoding: source, as: UTF8.self)) {
+                        return true
+                    }
+                }
+            }
+            return false
+        }
+
+        guard tag == ReadabilityUTF8Arrays.embed || tag == ReadabilityUTF8Arrays.iframe else {
+            return false
+        }
+
+        let source = element.attrOrEmptyUTF8(ReadabilityUTF8Arrays.src)
+        if !source.isEmpty {
+            return regEx.isVideo(String(decoding: source, as: UTF8.self))
+        }
+
+        // Preserve common lazy-video markup without treating arbitrary data or
+        // presentation attributes as authority for executable content.
+        guard let attributes = element.getAttributes()?.asList() else { return false }
+        for attribute in attributes {
+            let name = attribute.getKey().lowercased()
+            guard name.hasPrefix("data-"), name.contains("src") || name.contains("url") else {
+                continue
+            }
+            if regEx.isVideo(String(decoding: attribute.getValueUTF8(), as: UTF8.self)) {
+                return true
+            }
+        }
+        return false
+    }
+
     private func clean(e: Element, tag: String) {
         let isEmbed = embeddedNodes.contains(tag.utf8Array)
         removeNodes(in: e, tagName: tag) { element in
-            if isEmbed {
-                if let attributes = element.getAttributes()?.asList() {
-                    for attribute in attributes {
-                        let value = String(decoding: attribute.getValueUTF8(), as: UTF8.self)
-                        if self.regEx.isVideo(value) { return false }
-                    }
-                }
-                // Mozilla inspects innerHTML only for <object>; iframe/embed
-                // descendants must not accidentally satisfy the video allowlist.
-                if browserDOMTagName(element, equals: "object"),
-                   self.regEx.isVideo((try? element.html()) ?? "") {
-                    return false
-                }
+            if isEmbed, self.isAllowlistedVideoEmbed(element) {
+                return false
             }
             return true
         }
@@ -1684,7 +1724,8 @@ final class ArticleGrabber: ProcessorBase {
         let endOfSearchMarker = getNextNode(node: e, ignoreSelfAndKids: true)
         var next = getNextNode(node: e)
         while let current = next, current != endOfSearchMarker {
-            let matchString = current.classNameSafe() + " " + current.idSafe()
+            let scoringSignals = contentNamespaces.scoringSignals(current)
+            let matchString = scoringSignals.className + " " + scoringSignals.id
             if filter(current, matchString) {
                 next = removeAndGetNext(node: current)
             } else {

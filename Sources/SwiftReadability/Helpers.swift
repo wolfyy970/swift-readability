@@ -1,5 +1,94 @@
 import SwiftSoup
 
+@inline(__always)
+func isHTMLTemplateElement(
+    _ element: Element,
+    documentUsesHTMLSyntax: Bool? = nil,
+    namespaces: ArticleContentNamespaceResolver? = nil
+) -> Bool {
+    guard element.tagName().lowercased() == "template" else { return false }
+
+    let usesHTMLSyntax = documentUsesHTMLSyntax
+        ?? element.ownerDocument().map { $0.outputSettings().syntax() == .html }
+        ?? false
+    guard usesHTMLSyntax else { return false }
+
+    return (namespaces ?? ArticleContentNamespaceResolver()).isHTMLContent(element)
+}
+
+/// Browser element queries count an HTML `<template>` element itself but do not
+/// enter its separate, inert `DocumentFragment`. SwiftSoup stores that fragment
+/// as ordinary children, so enforce the boundary explicitly and iteratively.
+func browserStyleElementCount(in document: Document) -> Int {
+    let usesHTMLSyntax = document.outputSettings().syntax() == .html
+    let namespaces = ArticleContentNamespaceResolver()
+    var count = 0
+    var stack = Array(document.getChildNodes().reversed())
+
+    while let node = stack.popLast() {
+        if let element = node as? Element {
+            count += 1
+            if isHTMLTemplateElement(
+                element,
+                documentUsesHTMLSyntax: usesHTMLSyntax,
+                namespaces: namespaces
+            ) {
+                continue
+            }
+        }
+
+        let children = node.getChildNodes()
+        if !children.isEmpty {
+            stack.append(contentsOf: children.reversed())
+        }
+    }
+    return count
+}
+
+/// Removes reader-inert HTML template payloads before metadata and extraction.
+/// XML and SVG/MathML elements named `template` remain ordinary content.
+func removeHTMLTemplateElements(from document: Document) throws {
+    guard document.outputSettings().syntax() == .html else { return }
+
+    let namespaces = ArticleContentNamespaceResolver()
+    var stack = Array(document.getChildNodes().reversed())
+    while let node = stack.popLast() {
+        if let element = node as? Element,
+           isHTMLTemplateElement(
+            element,
+            documentUsesHTMLSyntax: true,
+            namespaces: namespaces
+           ) {
+            try element.remove()
+            continue
+        }
+
+        let children = node.getChildNodes()
+        if !children.isEmpty {
+            stack.append(contentsOf: children.reversed())
+        }
+    }
+}
+
+/// Removes parsed DOM comment nodes without inspecting text or raw-data nodes.
+///
+/// Working at the DOM layer is important: comment-like bytes inside script,
+/// style, and JSON-LD elements are represented as data and remain untouched.
+func removeInertDOMComments(from root: Node) throws {
+    var stack = Array(root.getChildNodes().reversed())
+    while let node = stack.popLast() {
+        if node is Comment {
+            try node.remove()
+            continue
+        }
+
+        let children = node.getChildNodes()
+        if !children.isEmpty {
+            stack.append(contentsOf: children.reversed())
+        }
+    }
+}
+
 extension Element {
     func attrOrEmpty(_ key: String) -> String {
         (try? attr(key)) ?? ""
@@ -48,12 +137,32 @@ func textContentPreservingWhitespace(of node: Node) -> String {
         return data.getWholeData()
     }
     if let element = node as? Element {
-        return collectTextPreservingWhitespace(from: element)
+        let usesHTMLTemplateSemantics = element.ownerDocument()
+            .map { $0.outputSettings().syntax() == .html }
+            ?? false
+        return collectTextPreservingWhitespace(
+            from: element,
+            usingHTMLTemplateSemantics: usesHTMLTemplateSemantics
+        )
     }
     return ""
 }
 
-private func collectTextPreservingWhitespace(from element: Element) -> String {
+private func collectTextPreservingWhitespace(
+    from element: Element,
+    usingHTMLTemplateSemantics: Bool
+) -> String {
+    let namespaces = usingHTMLTemplateSemantics
+        ? ArticleContentNamespaceResolver()
+        : nil
+    if isHTMLTemplateElement(
+        element,
+        documentUsesHTMLSyntax: usingHTMLTemplateSemantics,
+        namespaces: namespaces
+    ) {
+        return ""
+    }
+
     var output: [String] = []
     output.reserveCapacity(8)
     var stack = Array(element.getChildNodes().reversed())
@@ -63,6 +172,13 @@ private func collectTextPreservingWhitespace(from element: Element) -> String {
         } else if let data = node as? DataNode {
             output.append(data.getWholeData())
         } else if let el = node as? Element {
+            if isHTMLTemplateElement(
+                el,
+                documentUsesHTMLSyntax: usingHTMLTemplateSemantics,
+                namespaces: namespaces
+            ) {
+                continue
+            }
             let children = el.getChildNodes()
             if !children.isEmpty {
                 stack.append(contentsOf: children.reversed())

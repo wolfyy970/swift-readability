@@ -3,6 +3,21 @@ import Testing
 @testable import SwiftReadability
 
 struct MozillaResultContractTests {
+    @Test(arguments: [
+        "",
+        "<!doctype html><html><head><title>Empty</title></head><body></body></html>",
+        "<script>Only script content</script>",
+        "<style>body { color: red; }</style>",
+    ])
+    func contentlessDocumentsReturnNil(_ html: String) throws {
+        let result = try Readability(
+            html: html,
+            url: URL(string: "https://example.com/empty")!
+        ).parse()
+
+        #expect(result == nil)
+    }
+
     @Test func textContentAndLengthUseDOMAndJavaScriptSemantics() throws {
         let html = """
         <html><head><title>Text contract</title></head><body><article><p>Hello <em>world</em>.</p><p>Second 😀 paragraph.</p></article></body></html>

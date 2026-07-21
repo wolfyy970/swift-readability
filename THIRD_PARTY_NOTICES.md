@@ -8,13 +8,13 @@ See [`docs/provenance-and-licensing.md`](docs/provenance-and-licensing.md) for t
 
 This repository is a fork of the SwiftReadability implementation published by Lake of Fire. That implementation established the native Swift foundation and remains part of this repository's provenance and Git history. Its BSD 3-Clause license and 2025 Lake of Fire copyright notice are preserved in [`LICENSE`](LICENSE).
 
-The Lake of Fire implementation is credited as lineage, not treated as the behavioral specification for current work. Compatibility decisions are validated directly against the pinned Mozilla Readability implementation described below.
+The Lake of Fire implementation is credited as lineage, not treated as the behavioral specification for current work. Compatibility decisions are validated directly against the pinned Mozilla Readability executable and semantic comparison baseline described below.
 
 Project: <https://github.com/lake-of-fire/swift-readability>
 
 ## Mozilla Readability
 
-Copyright © 2010 Arc90 Inc. Mozilla Readability is licensed under the Apache License, Version 2.0. Mozilla Readability at commit [`ab4027a8b37669745016869a37a504727992b2ba`](https://github.com/mozilla/readability/commit/ab4027a8b37669745016869a37a504727992b2ba) is the behavioral authority used by this package.
+Copyright © 2010 Arc90 Inc. Mozilla Readability is licensed under the Apache License, Version 2.0. Mozilla Readability at commit [`ab4027a8b37669745016869a37a504727992b2ba`](https://github.com/mozilla/readability/commit/ab4027a8b37669745016869a37a504727992b2ba) is the pinned executable and semantic comparison baseline used by this package.
 
 The optional `SwiftReadabilityJavaScriptReference` product packages the official JavaScript sources from Mozilla under `Sources/SwiftReadabilityJavaScriptReference/Resources/`. Both files are byte-for-byte copies from commit `ab4027a`; tests pin their SHA-256 digests as follows:
 
@@ -23,7 +23,17 @@ The optional `SwiftReadabilityJavaScriptReference` product packages the official
 | `Readability.js` | `e9330028c8a5a4aa7d75147be2605d520f7f213c7b28474947dc0e9c984e9bed` |
 | `Readability-readerable.js` | `e73600367067be2da322c0f26be9c4ec7759cd01b630dbb57278c326e5b5aba8` |
 
-The shared compatibility fixtures retain Mozilla's applicable copyright and license terms. Project-specific enhanced fixture profiles are separately identified in the fixture manifest and are not represented as Mozilla expectations. The production `SwiftReadability` product is a native Swift implementation and does not contain or depend on the JavaScript resources. Native Swift files which adapt Mozilla behavior have been materially changed from the upstream JavaScript; this package does not represent them as clean-room work.
+The corpus contains 130 fixture sets imported from Mozilla's `test/test-pages`
+corpus; those retain Mozilla's applicable copyright and license terms. Six
+additional source snapshots were captured for this Swift project and are not
+represented as Mozilla-originated fixtures. Five project-specific enhanced
+profiles are separately identified in the fixture manifest and are not
+represented as Mozilla expectations. Underlying publisher content retains its
+applicable rights. The production `SwiftReadability` product is a native Swift
+implementation and does not contain or depend on the JavaScript resources.
+Native Swift files which adapt Mozilla behavior have been materially changed
+from the upstream JavaScript; this package does not represent them as
+clean-room work.
 
 Project: <https://github.com/mozilla/readability>
 

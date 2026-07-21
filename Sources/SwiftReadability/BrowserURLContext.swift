@@ -28,6 +28,10 @@ struct BrowserURLContext {
     }
 
     func resolve(_ reference: String) -> String? {
-        baseURL.resolve(reference).map(String.init)
+        resolveURL(reference).map(String.init)
+    }
+
+    func resolveURL(_ reference: String) -> WebURL? {
+        baseURL.resolve(reference)
     }
 }

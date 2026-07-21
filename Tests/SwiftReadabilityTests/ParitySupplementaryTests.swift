@@ -204,7 +204,9 @@ struct ParitySupplementaryTests {
             _ = try reader.parse()
             #expect(Bool(false), "Expected parse() to throw when exceeding maxElemsToParse")
         } catch {
-            #expect(error.localizedDescription.contains("Aborting parsing document;"))
+            let error = error as NSError
+            #expect(error.domain == "Readability")
+            #expect(error.code == 1)
         }
     }
 

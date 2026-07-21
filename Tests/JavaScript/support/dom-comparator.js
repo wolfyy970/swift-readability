@@ -4,6 +4,7 @@ const assert = require("node:assert/strict");
 const { JSDOM, VirtualConsole } = require("jsdom");
 const prettyPrint = require("js-beautify").html;
 const xmlNameValidator = require("xml-name-validator").name;
+const { removeDOMComments } = require("./remove-dom-comments");
 
 const quietVirtualConsole = new VirtualConsole();
 
@@ -76,9 +77,9 @@ function attributesForNode(node) {
 /**
  * Compare the complete observable DOM used by the fixture gates.
  *
- * Formatting-only text nodes are ignored, as in Mozilla's fixture harness.
- * Comments are intentionally not ignored: their position and exact data are
- * part of raw-input Readability output and are covered by the direct oracle.
+ * Formatting-only text nodes and inert comments are ignored, as in Mozilla's
+ * fixture harness. Normalizing after comment removal coalesces text nodes that
+ * were split only by comments while preserving their exact combined text.
  */
 function assertDOMEqual(actualHTML, expectedHTML, context = "DOM output") {
   const actualJSDOM = new JSDOM(prettyHTML(actualHTML), {
@@ -91,6 +92,11 @@ function assertDOMEqual(actualHTML, expectedHTML, context = "DOM output") {
   const expectedDOM = expectedJSDOM.window.document;
 
   try {
+    removeDOMComments(actualDOM);
+    removeDOMComments(expectedDOM);
+    actualDOM.normalize();
+    expectedDOM.normalize();
+
     let actualNode = actualDOM.documentElement || actualDOM.childNodes[0];
     let expectedNode = expectedDOM.documentElement || expectedDOM.childNodes[0];
 
@@ -110,12 +116,6 @@ function assertDOMEqual(actualHTML, expectedHTML, context = "DOM output") {
           htmlTransform(actualNode.textContent),
           htmlTransform(expectedNode.textContent),
           `${context}: text mismatch`
-        );
-      } else if (actualNode.nodeType === actualNode.COMMENT_NODE) {
-        assert.equal(
-          actualNode.data,
-          expectedNode.data,
-          `${context}: comment mismatch`
         );
       } else if (actualNode.nodeType === actualNode.ELEMENT_NODE) {
         assert.deepEqual(

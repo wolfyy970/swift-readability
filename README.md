@@ -1,55 +1,115 @@
-# SwiftReadability
+# SwiftReadability: Swift article and web page text extraction
 
-A native Swift implementation of [Mozilla Readability](https://github.com/mozilla/readability), using [SwiftSoup](https://github.com/scinfu/SwiftSoup) for standards-aware HTML parsing and DOM operations and [WebURL](https://github.com/karwa/swift-url) for WHATWG URL resolution.
+**SwiftReadability is a native Swift package for extracting clean article text,
+readable HTML, metadata, links, images, and primary content from webpages.** It
+is a Swift implementation of [Mozilla Readability](https://github.com/mozilla/readability)
+for Reader Mode, read-later apps, offline reading, search indexing,
+summarization, and LLM or RAG content pipelines on iOS, macOS, Linux, and
+server-side Swift.
 
-`SwiftReadability` extracts the primary article from an HTML document without a browser, JavaScript runtime, Node process, or network service. The earlier [lake-of-fire Swift port](https://github.com/lake-of-fire/swift-readability) established the native Swift foundation and remains credited implementation lineage. Default compatibility is measured against Mozilla Readability at commit [`ab4027a`](https://github.com/mozilla/readability/commit/ab4027a); deliberately different behavior is isolated behind explicit extensions.
+Pass it an HTML string or SwiftSoup document plus the page URL. SwiftReadability
+identifies the main article and removes navigation, advertisements, sharing
+controls, hidden fallbacks, and other boilerplate while preserving useful
+headings, paragraphs, lists, tables, formulas, media, and metadata.
 
-## Architecture
+The production library is native Swift. It requires no WebKit browser,
+JavaScript runtime, Node process, or network service, and it does not fetch the
+page for you.
 
-SwiftReadability is a standalone Swift Package Manager library for macOS, iOS, server, and command-line clients. It exposes two deliberately separate library products:
+**At a glance:** SwiftReadability matches pinned Mozilla on 136/136 tested
+inputs, while the inherited Swift suite previously skipped 27 known failures;
+runtime speed has not yet been compared head-to-head. [Benchmark
+details](BENCHMARK.md).
 
-| Product | Purpose | Runtime JavaScript |
-| --- | --- | --- |
-| `SwiftReadability` | Production article extraction | None |
-| `SwiftReadabilityJavaScriptReference` | Optional pinned Mozilla source for browser integrations, fixture oracles, and differential testing | Reference resources only |
+## Why SwiftReadability
 
-The production pipeline is native Swift. SwiftSoup parses HTML and provides DOM operations; WebURL supplies browser-compatible URL parsing and relative-reference resolution; SwiftReadability owns metadata discovery, candidate scoring, cleanup, and result serialization. The `SwiftReadability` target neither contains nor depends on the JavaScript reference target.
+Use SwiftReadability to:
 
-Non-Mozilla behavior is an explicit compatibility layer, not a competing Readability implementation. `ReadabilityOptions()` enables no extensions and is the mode compared directly with Mozilla. Clients compose only the granular `ReadabilityExtensions` flags they deliberately need; the package provides no client-specific presets. An extension may be added only with focused positive and false-positive tests while the complete default-mode Mozilla differential remains green.
+- extract article text and clean HTML from news, blogs, documentation, and other
+  content-heavy pages;
+- build a native Swift Reader Mode, reading app, read-later service, or offline
+  article view;
+- remove menus, ads, related-content rails, social buttons, and repeated site
+  chrome without flattening the article structure;
+- recover titles, authors, excerpts, site names, publication times, links,
+  images, tables, captions, and language metadata; or
+- prepare focused webpage content for search, accessibility, summarization,
+  embeddings, and retrieval-augmented generation.
+
+SwiftReadability is an article and main-content parser, not a crawler, browser,
+general-purpose web scraper, or HTML sanitizer.
+
+## Accuracy against Mozilla Readability
+
+Default, extension-free output is compared directly with Mozilla Readability at
+commit [`ab4027a`](https://github.com/mozilla/readability/commit/ab4027a8b37669745016869a37a504727992b2ba).
+The current differential finds no semantic result difference across **136/136**
+frozen inputs—130 from Mozilla's regression corpus and six captured for this
+project—plus 13 focused option/default cases.
+
+The final pre-rewrite suite built on the inherited Swift port listed 27 known
+fixture failures; the current manifest lists none. The comparison infrastructure
+is also substantially stronger, so this is evidence of broader verification,
+not a claim that SwiftReadability is universally better than Mozilla on every
+webpage.
+
+See [Benchmark and verification](BENCHMARK.md) for the corpus sources,
+comparison contract, current test counts, reproduction commands, performance
+harness, and the limits of these claims.
+
+## Authorship and lineage
+
+**ChatGPT 5.6 Sol—the OpenAI GPT-5.6 Sol model operating through Codex—is the
+primary engineering author of the post-0.3.2 rewrite.** The repository
+maintainer directed and reviewed that work.
+
+[Lake of Fire](https://github.com/lake-of-fire/swift-readability) created the
+original Swift Readability port and established this repository's native
+foundation. Mozilla supplies the original Readability implementation and pinned
+comparison baseline; Readability4J also remains credited implementation lineage.
+This is materially derived work, not a clean-room implementation.
+
+See [Authors and implementation lineage](AUTHORS.md) for the complete
+attribution and scope.
 
 ## Requirements
 
 - Swift 6.2
 - iOS 15+, macOS 13+, tvOS 15+, or watchOS 9+
-- SwiftSoup 2.13.6 is the exact tested DOM baseline. `Package.resolved` pins revision `ead56133a693d0184d8c2db1a6d6394410cacfd6`.
-- WebURL 0.4.2 is the exact tested WHATWG URL baseline. `Package.resolved` pins revision `9306a962396a50d7d88e924afcd7ec67226763db`.
+- Linux with Swift 6.2; CI runs on Ubuntu 24.04
+- SwiftSoup 2.13.6
+- WebURL 0.4.2
 
-Node and npm are needed only for the optional JavaScript reference and differential test runners. Applications that depend only on `SwiftReadability` do not need them.
+Node 22.22.2 or later within the Node 22 release line is needed only for the
+optional JavaScript reference and differential tests. Native applications do
+not need Node or npm.
 
-WebURL is a pure-Swift, web-platform-test-verified implementation whose Swift 5.5 package manifest back-deploys across every platform supported here. Its core target has no platform runtime dependency: `SwiftReadability` links `WebURL`, `IDNA`, and `UnicodeDataStructures`. SwiftPM also resolves the separately declared Swift System integration package, but no Swift System target is linked into the production product. Binary distributors must retain WebURL's Apache-2.0 license and NOTICE attribution as described in [Third-party notices](THIRD_PARTY_NOTICES.md).
+## Swift Package Manager installation
 
-WebURL adds native code to statically linked clients, so applications should measure final artifact size and extraction performance in their own build configuration. The checked Release benchmark smoke verifies that the harness remains deterministic and fail-closed; it is not a performance-regression gate because no stored baseline or threshold is enforced. This project does not present a stale point-in-time binary measurement as a universal size or speed claim.
-
-## Installation
-
-Add SwiftReadability with Swift Package Manager:
+Add SwiftReadability to `Package.swift`:
 
 ```swift
 .package(
     url: "https://github.com/wolfyy970/swift-readability.git",
-    from: "0.3.2"
+    .upToNextMinor(from: "0.3.2")
 )
 ```
 
-Then add only the native product to an application target:
+Then add the native product to your application target:
 
 ```swift
 .product(name: "SwiftReadability", package: "swift-readability")
 ```
 
-The JavaScript reference product is optional and should not be linked into an application unless its source resources are intentionally needed.
+SwiftReadability is pre-1.0. The range above accepts patch releases in the 0.3
+line without automatically admitting a potentially breaking 0.4 release. Use
+`exact: "0.3.2"` when reproducible extraction output matters more than
+automatically receiving fixes.
 
-## Usage
+The optional `SwiftReadabilityJavaScriptReference` product exists for
+integrations and development comparison. Most applications should not link it.
+
+## Extract article text and HTML in Swift
 
 ```swift
 import SwiftReadability
@@ -66,145 +126,120 @@ if let article = try reader.parse() {
 }
 ```
 
-Default options provide Mozilla-compatible behavior. Clients may deliberately compose individual non-Mozilla policies when their input requires them:
+Pass the document's actual page URL—normally the final response URL after
+redirects. It is used to resolve `<base>`, links, images, and other relative
+references. SwiftReadability does not download the page.
+
+`parse()` returns `nil` when no article can be selected and may throw when
+parsing fails or a configured element limit rejects the document.
+
+Check whether attempting extraction is likely to be worthwhile:
 
 ```swift
-let adaptedReader = Readability(
+let isReaderable = Readability.isProbablyReaderable(html: htmlString)
+```
+
+`isProbablyReaderable` is an inexpensive heuristic, not a correctness gate. It
+can return false positives and false negatives.
+
+### Extraction options and extensions
+
+Most `ReadabilityOptions` fields correspond to Mozilla Readability options.
+Publisher-specific recovery and cleanup remain explicit, opt-in extensions:
+
+```swift
+let reader = Readability(
     html: htmlString,
     url: URL(string: "https://example.com/article")!,
     options: ReadabilityOptions(
         extensions: [.imageCarouselRecovery, .publisherChromeCleanup]
     )
 )
-
-let article = try adaptedReader.parse()
 ```
 
-Available flags cover image-carousel recovery, publisher-chrome cleanup, article-body preservation, significant-media preservation, and ruby normalization. There is intentionally no aggregate preset: choosing and versioning a policy combination belongs to the consuming application.
+Available flags cover image-carousel recovery, publisher-chrome cleanup,
+article-body preservation, significant-media preservation, and ruby
+normalization. There is intentionally no aggregate public preset; the consuming
+application owns the policy combination it enables.
 
-Check whether a document is likely to contain a readable article:
+HTML-backed readers build a fresh DOM for every parse. Readers created with
+`Readability(document:)` destructively normalize the supplied SwiftSoup
+document and should be treated as single-use. `Readability` is not `Sendable`;
+create and use an instance within one task or actor.
 
-```swift
-let isReaderable = Readability.isProbablyReaderable(html: htmlString)
-```
+Advanced option semantics, serializers, state, and extension boundaries are
+documented in [Architecture](ARCHITECTURE.md).
 
-Provide a custom serializer when extracted content should be returned as a type other than `String`:
+## Architecture
 
-```swift
-let result = try reader.parse { articleElement in
-    articleElement
-}
-```
+The production pipeline is native Swift: SwiftSoup parses and manipulates the
+DOM, WebURL resolves URLs using WHATWG behavior, and SwiftReadability owns
+metadata discovery, candidate scoring, article cleanup, and serialization. The
+native target neither contains nor depends on the optional Mozilla JavaScript
+reference target.
 
-## Options
+See [Architecture](ARCHITECTURE.md) for the package topology, extraction
+pipeline, public API boundary, state model, browser-semantics adapters, quality
+priorities, and source map.
 
-Most `ReadabilityOptions` fields correspond directly to Mozilla Readability options: `debug`, `maxElemsToParse`, `nbTopCandidates`, `charThreshold`, `classesToPreserve`, `keepClasses`, `serializer`, `disableJSONLD`, `allowedVideoRegex`, and `linkDensityModifier`. Their default, extension-free behavior is covered by the Mozilla differential.
+## Documentation
 
-Two fields are intentionally Swift-specific and are not represented as Mozilla options:
-
-- `useXMLSerializer` requests SwiftSoup's XML output syntax when the supplied document was parsed as XML. It exists for Swift serialization use cases; it is not part of the JavaScript API and is outside the default HTML differential contract.
-- `extensions` enables explicitly named, non-Mozilla compatibility policies for publisher cleanup, content recovery, media preservation, and ruby normalization. Its default is the empty set.
-
-`Readability(document:)` operates on the supplied SwiftSoup document directly and destructively normalizes it, matching Mozilla's mutation model. The default serializer emits HTML. Prefer the generic `parse(serializer:)` overload when a caller needs a non-string projection; use XML serialization only for an actual XML input whose consumer requires XML syntax.
-
-## Behavioral authority and provenance
-
-The compatibility corpus contains 136 Mozilla-format HTML inputs. In default mode, the direct differential compares every input and every observable result field with the byte-for-byte upstream Mozilla JavaScript at commit `ab4027a`; Swift and Mozilla currently match **136/136**. The official `Readability.js` and `Readability-readerable.js` files are protected by fixed SHA-256 integrity tests, making any oracle change require an explicit digest update and upstream verification during review.
-
-Mozilla's own JSDOM fixture runner deliberately removes source comments before comparing its frozen `expected.html` files, even though production Readability preserves comments inside selected content. This repository retains those upstream snapshots unchanged as provenance. For the 33 upstream inputs where raw comments change observable output, `expected-raw-input.html` is a generated overlay from the byte-verified Mozilla oracle. Generation first proves the legacy file still matches Mozilla under its historical comment-free input policy, then records the untouched raw-input result. Native and JavaScript fixture comparisons prefer the overlay and compare comment position and data strictly; neither production output nor the direct differential removes or masks comments.
-
-The same corpus also contains five explicitly profiled extension regressions for difficult Asahi article chrome, a Hypebeast carousel, a Web Japan feature, and BEPAL content. Their enhanced expected metadata, DOM, and content assertions use the test-only `publisherAdaptations` profile, which composes all granular extensions and is not public API or Mozilla output. The differential runner intentionally ignores enhancement profiles and parses all 136 sources with empty extensions on both sides; this preserves a clean Mozilla baseline while letting the native expected-output suite verify opt-in behavior separately.
-
-The repository was forked from lake-of-fire's Swift implementation and retains its BSD license, attribution, and history. That implementation established a useful native foundation, informed in turn by Mozilla Readability and Readability4J. Current work builds on that lineage while using the pinned Mozilla behavior as the default compatibility contract.
-
-This is not represented as a clean-room implementation. It is a materially rewritten work in a documented lineage: the earlier Swift port supplied scaffolding, Mozilla supplies the pinned behavioral contract and the optional byte-identical oracle, and both Mozilla Readability and Readability4J remain credited where their Apache-licensed work informs the native implementation. See [Provenance and licensing](docs/provenance-and-licensing.md) for the component map and [Third-party notices](THIRD_PARTY_NOTICES.md) for attribution and redistribution terms.
+- [Architecture](ARCHITECTURE.md)
+- [Benchmark and verification](BENCHMARK.md)
+- [Authors and implementation lineage](AUTHORS.md)
+- [Provenance and licensing](docs/provenance-and-licensing.md)
+- [Contributing and release checks](CONTRIBUTING.md)
+- [Third-party notices](THIRD_PARTY_NOTICES.md)
+- [Changelog](CHANGELOG.md)
 
 ## Testing
 
-Run the native Swift suite, including the packaged fixture corpus and focused regression tests:
+Run the native suite:
 
 ```sh
 swift test
-# or
-mise run test:swift
 ```
 
-Run the native suite, pinned JavaScript oracle checks, and direct Swift-versus-Mozilla differential:
+Run the complete native, JavaScript reference, and direct differential gates:
 
 ```sh
 mise run test:parity
 ```
 
-The fixture loaders fail closed: missing or malformed manifests, unknown selections or profiles, invalid regular expressions, missing sources, and zero selected fixtures are test failures rather than silent passes. Source bytes are passed to both implementations without trimming. The native expected-output runner applies the test-only `publisherAdaptations` composition only to fixtures explicitly named under `extensionProfiles`; JavaScript expectations for those enhanced profiles are deliberately not treated as Mozilla expectations.
-
-Run the direct Swift-versus-Mozilla result contract:
-
-```sh
-npm --prefix Tests/JavaScript ci
-npm --prefix Tests/JavaScript run test:differential
-```
-
-The differential checks parse success, readerability, every metadata field, exact browser-serialized `content`, text content, and Mozilla-compatible UTF-16 length with true default options and no extensions. A canonical DOM comparison runs as an additional structural diagnostic rather than masking serialization differences. The current full result is 136/136. It uses the optional `SwiftReadabilityJavaScriptReference` product as an oracle; it does not add JavaScript to the native product. The executable oracle environment is pinned by `Tests/JavaScript/package-lock.json` to Node 22 in CI and JSDOM 29.1.1, because DOM and serialization behavior are part of the comparison surface. Mozilla comparisons run in bounded, short-lived fixture batches so multi-megabyte JSDOM pages cannot accumulate across the corpus; injected mismatches and malformed batches are covered by fail-closed tests.
-
-`npm test` also verifies that both oracle files are byte-for-byte Mozilla `ab4027a` using pinned SHA-256 values. A source change therefore fails independently of behavioral fixture results:
-
-```sh
-npm --prefix Tests/JavaScript test
-```
-
-The same command checks every raw-input overlay by regenerating it in memory from the pinned oracle. Maintainers can explicitly rewrite the overlays after a reviewed oracle or corpus update:
-
-```sh
-npm --prefix Tests/JavaScript run fixtures:write-raw-input
-npm --prefix Tests/JavaScript run fixtures:check-raw-input
-```
-
-The write command is deterministic and refuses to create an overlay unless the corresponding legacy `expected.html` still matches the pinned Mozilla implementation after reproducing Mozilla's documented comment-removal fixture setup.
-
-Filter the expected-output fixture runners with an exact comma-separated selection or regular expression:
-
-```sh
-SWIFT_READABILITY_FIXTURES=nytimes-3,qq mise run test:parity
-SWIFT_READABILITY_FIXTURE_REGEX='^(mathjax|videos-2)$' mise run test:parity
-```
-
-Filter the direct differential runner by fixture-name substring:
-
-```sh
-SWIFT_READABILITY_DIFFERENTIAL_FILTER=guardian-1 \
-  npm --prefix Tests/JavaScript run test:differential
-```
-
-The full, unfiltered suites are the release gates. A filtered run is only a debugging aid.
-
-## Benchmarking
-
-Run the fail-closed fixture benchmark in release mode:
-
-```sh
-swift run -c release SwiftReadabilityBench --iterations 5 --warmup 1
-```
-
-Inspect one fixture with internal pipeline distributions, or emit only an aggregate summary:
-
-```sh
-swift run -c release SwiftReadabilityBench \
-  --filter guardian-1 --iterations 10 --warmup 2 --timings
-
-swift run -c release SwiftReadabilityBench \
-  --iterations 5 --warmup 1 --summary-only
-```
-
-Use `--fixtures PATH` and, if needed, `--manifest PATH` for another Mozilla-format corpus. Other flags are `--xml` and `--help`.
-
-The benchmark harness rejects unknown or malformed arguments, missing or empty corpora, missing sources, parse failures, empty output, invalid UTF-16 lengths, nondeterministic repeated output, invalid timing samples, and zero-duration measurements. Each warmup and measured iteration constructs a fresh reader. Output includes per-fixture and aggregate p50, p95, and mean latency, article and input throughput, and a deterministic result checksum; `--timings` adds distributions for internal pipeline labels. CI runs a release-mode benchmark smoke, and focused tests cover distribution failure modes.
-
-Benchmark results supplement correctness evidence; they do not replace parity, differential, or state-isolation tests.
+The unfiltered suites are release evidence. Filtered fixture runs are debugging
+aids. See [Benchmark and verification](BENCHMARK.md) to reproduce
+individual layers or run the performance harness, and [Contributing](CONTRIBUTING.md)
+for the release checklist.
 
 ## Security
 
-SwiftReadability selects and extracts article content; it does **not** sanitize untrusted HTML. A client that renders `result.content` must apply an appropriate HTML sanitizer and Content Security Policy first, consistent with [Mozilla Readability's security guidance](https://github.com/mozilla/readability#security). The package neither renders nor executes extracted content.
+SwiftReadability extracts article content; it does **not** sanitize untrusted
+HTML. Before rendering `article.content`, apply an appropriate HTML sanitizer
+and Content Security Policy. The package neither renders nor executes extracted
+content.
+
+For attacker-controlled input, enforce input-byte, execution-time, and memory
+limits outside SwiftReadability. `maxElemsToParse` is checked after SwiftSoup
+parses the HTML, so it is not a parser-resource limit.
+
+## Contributing
+
+Issues, reproducible extraction fixtures, corrections, and pull requests are
+welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, change
+requirements, required checks, and the release checklist.
 
 ## License
 
-The repository is a multi-license distribution. The inherited Swift implementation and original Swift contributions are distributed under the BSD 3-Clause license in [`LICENSE`](LICENSE); Apache-derived implementation material, the Mozilla oracle, and Mozilla-derived fixtures remain subject to Apache-2.0; SwiftSoup is MIT; and WebURL is Apache-2.0 with its upstream NOTICE attribution. This is not a blanket relicensing of third-party work. See [Provenance and licensing](docs/provenance-and-licensing.md) and [Third-party notices](THIRD_PARTY_NOTICES.md).
+This is a multi-license distribution. The inherited Swift implementation and
+original Swift contributions use the BSD 3-Clause license in [`LICENSE`](LICENSE).
+Apache-derived material, the optional Mozilla oracle, Mozilla-derived fixtures,
+SwiftSoup, and WebURL retain their applicable terms.
+
+See [Provenance and licensing](docs/provenance-and-licensing.md) and [Third-party
+notices](THIRD_PARTY_NOTICES.md) before redistributing source or binaries.
+
+## Disclosure
+
+**SwiftReadability was vibe-coded with intent.** ChatGPT 5.6 Sol authored the
+post-0.3.2 rewrite under human direction and review. It is tested, not presumed
+perfect. Issues, corrections, and contributions are welcome.

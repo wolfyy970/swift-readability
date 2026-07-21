@@ -3,6 +3,51 @@ import Testing
 @testable import SwiftReadability
 
 struct MetadataParserTests {
+    @Test(arguments: ["svg", "math"])
+    func documentTitleIgnoresForeignNamespaceTitles(_ foreignTag: String) throws {
+        let expectedTitle = "Actual Article Title With Enough Words"
+        let document = try SwiftSoup.parse(
+            """
+            <html><body>
+              <\(foreignTag)><title>Foreign diagram label</title></\(foreignTag)>
+              <title>\(expectedTitle)</title>
+              <article><p>Article prose.</p></article>
+            </body></html>
+            """
+        )
+
+        let metadata = MetadataParser().getArticleMetadata(document, disableJSONLD: true)
+
+        #expect(metadata.title == expectedTitle)
+    }
+
+    @Test func documentTitleIsEmptyWhenOnlyForeignTitlesExist() throws {
+        let document = try SwiftSoup.parse(
+            "<html><body><svg><title>Foreign diagram label</title></svg></body></html>"
+        )
+
+        let metadata = MetadataParser().getArticleMetadata(document, disableJSONLD: true)
+
+        #expect(metadata.title == "")
+    }
+
+    @Test func documentTitleIgnoresTitlesInsideSVGHTMLIntegrationPoints() throws {
+        let expectedTitle = "Actual Article Title Outside The Diagram"
+        let document = try SwiftSoup.parse(
+            """
+            <html><body>
+              <svg><foreignObject><title>Embedded diagram control title</title></foreignObject></svg>
+              <title>\(expectedTitle)</title>
+              <article><p>Article prose.</p></article>
+            </body></html>
+            """
+        )
+
+        let metadata = MetadataParser().getArticleMetadata(document, disableJSONLD: true)
+
+        #expect(metadata.title == expectedTitle)
+    }
+
     @Test func unicodeBeforeMatchedMetaPropertyDoesNotCrash() throws {
         let document = try SwiftSoup.parse(
             #"<html><head><meta property="😀 og:title" content="Unicode-safe title"></head></html>"#
@@ -99,9 +144,7 @@ struct MetadataParserTests {
         #expect(metadata.title == example.expected)
     }
 
-    // Source map: Mozilla Readability._getJSONLD only enters its author-array
-    // branch when the first entry exists and has a string `name`.
-    @Test func jsonLDAuthorArrayWithInvalidFirstEntryIsIgnored() throws {
+    @Test func jsonLDAuthorArraySkipsMalformedAndUnnamedEntries() throws {
         let document = try SwiftSoup.parse(
             """
             <html><head>
@@ -111,7 +154,14 @@ struct MetadataParserTests {
                   "@context": "https://schema.org",
                   "@type": "NewsArticle",
                   "headline": "Article Title With Several Useful Words",
-                  "author": [{"@type": "Organization"}, {"name": "Later Author"}]
+                  "author": [
+                    null,
+                    {"@type": "Organization"},
+                    "Unstructured Author",
+                    {"name": "  First Named Author  "},
+                    {"name": false},
+                    {"name": "Second Named Author"}
+                  ]
                 }
               </script>
             </head></html>
@@ -120,28 +170,25 @@ struct MetadataParserTests {
 
         let metadata = MetadataParser().getArticleMetadata(document, disableJSONLD: false)
 
-        #expect(metadata.byline == nil)
+        #expect(metadata.byline == "First Named Author, Second Named Author")
     }
 
-    // JavaScript Array.find evaluates its callback in order. Accessing @type on
-    // `null`, or calling `.match` on a truthy non-string @type, throws and makes
-    // Mozilla reject that entire JSON-LD script. Falsey non-string values do not.
     @Test(arguments: [
         (
-            json: #"[null,{"@context":"https://schema.org","@type":"NewsArticle","headline":"Wrong"}]"#,
-            expected: "Fallback Document Title With Enough Words"
+            json: #"[null,{"@context":"https://schema.org","@type":"NewsArticle","headline":"Accepted"}]"#,
+            expected: "Accepted"
         ),
         (
-            json: #"[{"@type":true},{"@context":"https://schema.org","@type":"NewsArticle","headline":"Wrong"}]"#,
-            expected: "Fallback Document Title With Enough Words"
+            json: #"[{"@type":true},{"@context":"https://schema.org","@type":"NewsArticle","headline":"Accepted"}]"#,
+            expected: "Accepted"
         ),
         (
-            json: #"{"@context":"https://schema.org","@graph":[null,{"@type":"NewsArticle","headline":"Wrong"}]}"#,
-            expected: "Fallback Document Title With Enough Words"
+            json: #"{"@context":"https://schema.org","@graph":[null,{"@type":"NewsArticle","headline":"Accepted"}]}"#,
+            expected: "Accepted"
         ),
         (
-            json: #"{"@context":"https://schema.org","@graph":[{"@type":{}},{"@type":"NewsArticle","headline":"Wrong"}]}"#,
-            expected: "Fallback Document Title With Enough Words"
+            json: #"{"@context":"https://schema.org","@graph":[{"@type":{}},{"@type":"NewsArticle","headline":"Accepted"}]}"#,
+            expected: "Accepted"
         ),
         (
             json: #"[{"@type":0},{"@context":"https://schema.org","@type":"NewsArticle","headline":"Accepted"}]"#,
@@ -151,8 +198,40 @@ struct MetadataParserTests {
             json: #"{"@context":"https://schema.org","@graph":[{"@type":0},{"@type":"NewsArticle","headline":"Accepted"}]}"#,
             expected: "Accepted"
         ),
+        (
+            json: #"{"@context":"https://schema.org","@type":"WebPage","@graph":[{"@type":"NewsArticle","headline":"Accepted"}]}"#,
+            expected: "Accepted"
+        ),
+        (
+            json: #"{"@context":"https://schema.org","@type":"WebPage","@graph":[{"@context":"https://schema.org","@type":"NewsArticle","headline":"Accepted"}]}"#,
+            expected: "Accepted"
+        ),
+        (
+            json: #"{"@context":"https://schema.org","@type":"WebPage","@graph":[{"@context":{"custom":"https://example.com/custom"},"@type":"NewsArticle","headline":"Accepted"}]}"#,
+            expected: "Accepted"
+        ),
+        (
+            json: #"{"@context":"https://schema.org","@type":"WebPage","@graph":[{"@context":"https://evil.example/vocab","@type":"NewsArticle","headline":"Wrong"}]}"#,
+            expected: "Fallback Document Title With Enough Words"
+        ),
+        (
+            json: #"[{"@context":"https://example.com/not-schema","@type":"NewsArticle","headline":"Wrong"},{"@context":"https://schema.org","@type":"NewsArticle","headline":"Accepted"}]"#,
+            expected: "Accepted"
+        ),
+        (
+            json: #"{"@context":"https://schema.org","@type":[null,true,"Person","NewsArticle"],"headline":"Accepted"}"#,
+            expected: "Accepted"
+        ),
+        (
+            json: #"[null,{"@type":true},{"@context":"https://schema.org","@type":"BreadcrumbList","headline":"Wrong"}]"#,
+            expected: "Fallback Document Title With Enough Words"
+        ),
+        (
+            json: #"{"@context":"https://schema.org","@type":[null,true,"Person","BreadcrumbList"],"headline":"Wrong"}"#,
+            expected: "Fallback Document Title With Enough Words"
+        ),
     ])
-    func malformedJSONLDSearchUsesMozillasOrderedFailureSemantics(
+    func jsonLDArticleSearchSkipsMalformedNeighborsButRequiresAnArticleType(
         example: (json: String, expected: String)
     ) throws {
         let document = try SwiftSoup.parse(
@@ -169,19 +248,22 @@ struct MetadataParserTests {
         #expect(metadata.title == example.expected)
     }
 
-    // Source map: Mozilla's schema.org context regex is intentionally
-    // case-sensitive. This prevents the native port from accepting JSON-LD
-    // that the pinned authority rejects.
-    @Test func jsonLDSchemaContextMatchingIsCaseSensitive() throws {
+    @Test func jsonLDGraphChildCannotReplaceSchemaContext() throws {
         let document = try SwiftSoup.parse(
             """
             <html><head>
-              <title>Fallback Document Title With Enough Words</title>
+              <title>Trusted Document Title With Enough Words</title>
+              <meta name="author" content="Trusted Author">
               <script type="application/ld+json">
                 {
-                  "@context": "https://SCHEMA.ORG",
-                  "@type": "NewsArticle",
-                  "headline": "JSON LD Title That Mozilla Rejects"
+                  "@context": "https://schema.org",
+                  "@type": "WebPage",
+                  "@graph": [{
+                    "@context": "https://evil.example/vocab",
+                    "@type": "NewsArticle",
+                    "headline": "Unrelated Graph Title",
+                    "author": {"name": "Wrong Author"}
+                  }]
                 }
               </script>
             </head></html>
@@ -190,13 +272,123 @@ struct MetadataParserTests {
 
         let metadata = MetadataParser().getArticleMetadata(document, disableJSONLD: false)
 
-        #expect(metadata.title == "Fallback Document Title With Enough Words")
+        #expect(metadata.title == "Trusted Document Title With Enough Words")
+        #expect(metadata.byline == "Trusted Author")
     }
 
-    // ECMAScript `$` matches only the actual end of the input here. ICU also
-    // matches before Unicode line separators such as U+0085, which would make
-    // the native parser accept a schema context rejected by pinned Mozilla.
-    @Test func jsonLDSchemaContextRequiresTheECMAScriptEndOfInput() throws {
+    @Test func jsonLDSchemaContextURLUsesNormalizedSchemeAndHostCasing() throws {
+        let document = try SwiftSoup.parse(
+            """
+            <html><head>
+              <title>Fallback Document Title With Enough Words</title>
+              <script type="application/ld+json">
+                {
+                  "@context": "https://SCHEMA.ORG",
+                  "@type": "NewsArticle",
+                  "headline": "Recovered JSON LD Title"
+                }
+              </script>
+            </head></html>
+            """
+        )
+
+        let metadata = MetadataParser().getArticleMetadata(document, disableJSONLD: false)
+
+        #expect(metadata.title == "Recovered JSON LD Title")
+    }
+
+    @Test func jsonLDSchemaContextArraySkipsMalformedNeighbors() throws {
+        let document = try SwiftSoup.parse(
+            """
+            <html><head>
+              <title>Fallback Document Title With Enough Words</title>
+              <script type="application/ld+json">
+                {
+                  "@context": [null, {"unrelated": "value"}, {"@vocab": "HTTPS://SCHEMA.ORG/"}],
+                  "@type": "NewsArticle",
+                  "headline": "Recovered Context Array Title"
+                }
+              </script>
+            </head></html>
+            """
+        )
+
+        let metadata = MetadataParser().getArticleMetadata(document, disableJSONLD: false)
+
+        #expect(metadata.title == "Recovered Context Array Title")
+    }
+
+    @Test(arguments: [
+        (
+            context: #"[{"@vocab":"https://schema.org/"},{"@vocab":"https://evil.example/vocab"}]"#,
+            title: "Fallback Document Title With Enough Words",
+            byline: "Trusted Meta Author"
+        ),
+        (
+            context: #"[{"@vocab":"https://evil.example/vocab"},{"@vocab":"https://schema.org/"}]"#,
+            title: "Ordered Context Article Title",
+            byline: "JSON LD Author"
+        ),
+    ])
+    func jsonLDContextArrayUsesTheFinalEffectiveVocabulary(
+        example: (context: String, title: String, byline: String)
+    ) throws {
+        let document = try SwiftSoup.parse(
+            """
+            <html><head>
+              <title>Fallback Document Title With Enough Words</title>
+              <meta name="author" content="Trusted Meta Author">
+              <script type="application/ld+json">
+                {
+                  "@context": \(example.context),
+                  "@type": "NewsArticle",
+                  "headline": "Ordered Context Article Title",
+                  "author": {"name": "JSON LD Author"}
+                }
+              </script>
+            </head></html>
+            """
+        )
+
+        let metadata = MetadataParser().getArticleMetadata(document, disableJSONLD: false)
+
+        #expect(metadata.title == example.title)
+        #expect(metadata.byline == example.byline)
+    }
+
+    @Test(
+        arguments: [
+            "https://schema.org.evil.example/",
+            "https://schema.org/Article",
+            "https://user@schema.org/",
+            "https://schema.org/?context=Article",
+        ]
+    )
+    func jsonLDSchemaContextRejectsLookalikeURLs(context: String) throws {
+        let fallback = "Fallback Document Title With Enough Words"
+        let document = try SwiftSoup.parse(
+            """
+            <html><head>
+              <title>\(fallback)</title>
+              <script type="application/ld+json">
+                {
+                  "@context": "\(context)",
+                  "@type": "NewsArticle",
+                  "headline": "Wrong Context Title"
+                }
+              </script>
+            </head></html>
+            """
+        )
+
+        let metadata = MetadataParser().getArticleMetadata(document, disableJSONLD: false)
+
+        #expect(metadata.title == fallback)
+    }
+
+    // A context must be the Schema.org origin itself, not that URL followed by
+    // an otherwise invisible non-URL character.
+    @Test func jsonLDSchemaContextRejectsInvalidTrailingCharacters() throws {
         let nextLine = "\u{0085}"
         let fallback = "Fallback Document Title With Enough Words"
         let document = try SwiftSoup.parse(
@@ -207,7 +399,7 @@ struct MetadataParserTests {
                 {
                   "@context": "https://schema.org\(nextLine)",
                   "@type": "NewsArticle",
-                  "headline": "JSON LD Title That Mozilla Rejects"
+                  "headline": "JSON LD Title With An Invalid Context"
                 }
               </script>
             </head></html>
@@ -244,12 +436,14 @@ struct MetadataParserTests {
         #expect(metadata.title == fallback)
     }
 
-    // Mozilla enumerates every script and then uses exact string equality on
-    // its `type` attribute; SwiftSoup's CSS attribute selector is broader.
     @Test(
-        arguments: ["APPLICATION/LD+JSON", " application/ld+json "]
+        arguments: [
+            "APPLICATION/LD+JSON",
+            " application/ld+json ",
+            "Application/Ld+Json; charset=utf-8",
+        ]
     )
-    func jsonLDScriptTypeRequiresMozillaExactMatch(type: String) throws {
+    func jsonLDScriptTypeMatchesMIMEEssenceCaseInsensitively(type: String) throws {
         let document = try SwiftSoup.parse(
             """
             <html><head>
@@ -258,7 +452,7 @@ struct MetadataParserTests {
                 {
                   "@context": "https://schema.org",
                   "@type": "NewsArticle",
-                  "headline": "JSON LD Title That Mozilla Rejects"
+                  "headline": "Recovered JSON LD Title"
                 }
               </script>
             </head></html>
@@ -267,7 +461,30 @@ struct MetadataParserTests {
 
         let metadata = MetadataParser().getArticleMetadata(document, disableJSONLD: false)
 
-        #expect(metadata.title == "Fallback Document Title With Enough Words")
+        #expect(metadata.title == "Recovered JSON LD Title")
+    }
+
+    @Test(arguments: ["application/ld+jsonish", "text/ld+json", "application/json"])
+    func jsonLDScriptTypeRejectsDifferentMIMEEssences(type: String) throws {
+        let fallback = "Fallback Document Title With Enough Words"
+        let document = try SwiftSoup.parse(
+            """
+            <html><head>
+              <title>\(fallback)</title>
+              <script type="\(type)">
+                {
+                  "@context": "https://schema.org",
+                  "@type": "NewsArticle",
+                  "headline": "Wrong MIME Title"
+                }
+              </script>
+            </head></html>
+            """
+        )
+
+        let metadata = MetadataParser().getArticleMetadata(document, disableJSONLD: false)
+
+        #expect(metadata.title == fallback)
     }
 
     // Source map: Mozilla Readability._isUrl uses the browser's one-argument
