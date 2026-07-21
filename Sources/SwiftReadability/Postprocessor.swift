@@ -76,7 +76,7 @@ final class Postprocessor: ProcessorBase {
         guard onlyChild.tagNameUTF8() == tagName else { return false }
         for node in element.getChildNodes() {
             if let text = node as? TextNode,
-               javaScriptHasTrailingNonWhitespace(text.getWholeText()) {
+               !javaScriptIsWhitespaceOnly(text.getWholeText()) {
                 return false
             }
         }
@@ -131,7 +131,7 @@ final class Postprocessor: ProcessorBase {
                 let href = String(decoding: link.attrOrEmptyUTF8(ReadabilityUTF8Arrays.href), as: UTF8.self)
                 if href.isEmpty { continue }
 
-                if href.hasPrefix("javascript:") {
+                if urlContext.resolveURL(href)?.scheme == "javascript" {
                     replaceJavascriptLink(link)
                 } else {
                     let resolved = toAbsoluteURI(href)

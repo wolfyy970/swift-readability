@@ -111,6 +111,7 @@ enum ReadabilityUTF8Arrays {
     static let srcset = "srcset".utf8Array
     static let style = "style".utf8Array
     static let summary = "summary".utf8Array
+    static let value = "value".utf8Array
     static let valign = "valign".utf8Array
     static let vspace = "vspace".utf8Array
     static let width = "width".utf8Array

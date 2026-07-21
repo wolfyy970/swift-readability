@@ -4,13 +4,13 @@
 import Foundation
 import SwiftSoup
 
-/// Optional behavior layered on top of Mozilla Readability's observable contract.
+/// Optional publisher-specific behavior layered on top of default extraction.
 ///
 /// The empty set is the default and is the mode used for direct differential
 /// testing against the pinned Mozilla implementation. These extensions exist for
 /// rendered publisher DOMs where a client deliberately prefers additional cleanup
-/// or media recovery. They are kept explicit so they can never silently redefine
-/// what "Mozilla compatible" means.
+/// or media recovery. They are kept explicit so application policy does not
+/// silently become the reusable library's default.
 public struct ReadabilityExtensions: OptionSet, Sendable {
     /// The bit mask backing the selected extensions.
     public let rawValue: UInt8
@@ -32,7 +32,7 @@ public struct ReadabilityExtensions: OptionSet, Sendable {
     public static let rubyNormalization = Self(rawValue: 1 << 4)
 }
 
-/// Configuration for the Mozilla-compatible extraction pipeline.
+/// Configuration for the Mozilla-aligned extraction pipeline.
 public struct ReadabilityOptions {
     /// A zero value disables the document element-count limit.
     public static let defaultMaxElemsToParse = 0
@@ -46,7 +46,7 @@ public struct ReadabilityOptions {
 
     /// Enables diagnostic logging from the extraction façade.
     public var debug: Bool
-    /// Maximum number of source elements to parse; zero disables the limit.
+    /// Maximum parsed DOM element count accepted before extraction; zero disables the post-parse limit.
     public var maxElemsToParse: Int
     /// Number of top-scoring candidates considered during article selection.
     public var nbTopCandidates: Int
@@ -63,17 +63,18 @@ public struct ReadabilityOptions {
     public var useXMLSerializer: Bool
     /// Ignores JSON-LD metadata and uses other document signals when `true`.
     public var disableJSONLD: Bool
-    /// Replaces Mozilla's default allowlist for embedded-video URLs.
+    /// Replaces Mozilla's default allowlist for embedded-video URLs using
+    /// Foundation `NSRegularExpression` semantics.
     public var allowedVideoRegex: NSRegularExpression?
     /// Adjusts the link-density threshold used by conditional cleanup.
     public var linkDensityModifier: Double
-    /// Explicit non-Mozilla behavior to apply after establishing the compatible baseline.
+    /// Explicit publisher-specific behavior to apply after default extraction.
     public var extensions: ReadabilityExtensions
 
     /// Creates extraction options using Mozilla-compatible defaults.
     ///
     /// Pass a nonempty `extensions` set only when the caller intentionally wants
-    /// behavior beyond the pinned Mozilla contract.
+    /// publisher-specific recovery or cleanup behavior.
     public init(debug: Bool = false,
                 maxElemsToParse: Int = ReadabilityOptions.defaultMaxElemsToParse,
                 nbTopCandidates: Int = ReadabilityOptions.defaultNTopCandidates,
@@ -144,10 +145,8 @@ public final class Article {
     public let uri: String
     /// The article title.
     public var title: String?
-    /// The mutable article DOM; replacing it invalidates the cached plain text.
-    public var articleContent: Element? {
-        didSet { cachedTextContent = nil }
-    }
+    /// The mutable article DOM.
+    public var articleContent: Element?
     /// The article excerpt.
     public var excerpt: String?
     /// The article byline.
@@ -156,7 +155,6 @@ public final class Article {
     public var dir: String?
     /// The source document's character encoding, when known.
     public var charset: String?
-    private var cachedTextContent: String?
 
     /// Creates an empty article container for a source URI.
     public init(uri: String) {
@@ -169,12 +167,9 @@ public final class Article {
     public var contentWithUtf8Encoding: String? { getContent(withEncoding: "utf-8") }
     /// A complete HTML document declaring ``charset`` or UTF-8 as a fallback.
     public var contentWithDocumentsCharsetOrUtf8: String? { getContent(withEncoding: charset ?? "utf-8") }
-    /// SwiftSoup's normalized element text, cached until ``articleContent`` changes.
+    /// SwiftSoup's normalized element text, reflecting the current mutable DOM.
     public var textContent: String? {
-        if let cachedTextContent { return cachedTextContent }
-        let value = (try? articleContent?.text()) ?? articleContent?.ownText()
-        cachedTextContent = value
-        return value
+        (try? articleContent?.text()) ?? articleContent?.ownText()
     }
     /// The Swift grapheme-cluster count of ``textContent``, or `-1` when no content exists.
     ///

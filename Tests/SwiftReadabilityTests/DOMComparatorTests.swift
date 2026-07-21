@@ -38,7 +38,7 @@ struct DOMComparatorTests {
         #expect(comparison.isEqual)
     }
 
-    @Test func commentsAreObservable() {
+    @Test func inertCommentsAreIgnored() {
         let missing = DOMComparator.compare(
             actualHTML: "<div><!-- implementation note --><p>Text</p></div>",
             expectedHTML: "<div><p>Text</p></div>"
@@ -52,18 +52,48 @@ struct DOMComparatorTests {
             expectedHTML: "<div><!-- retained --><p>Text</p></div>"
         )
 
-        #expect(!missing.isEqual)
-        #expect(!changed.isEqual)
+        let splitText = DOMComparator.compare(
+            actualHTML: "<p>a<!-- split -->b</p>",
+            expectedHTML: "<p>ab</p>"
+        )
+
+        #expect(missing.isEqual)
+        #expect(changed.isEqual)
         #expect(identical.isEqual)
+        #expect(splitText.isEqual)
     }
 
-    @Test func attributeOrderIsSignificantLikeTheJavaScriptOracle() {
+    @Test func attributeOrderIsNotSemanticallySignificant() {
         let comparison = DOMComparator.compare(
             actualHTML: #"<p id="article" class="body">Text</p>"#,
             expectedHTML: #"<p class="body" id="article">Text</p>"#
         )
 
-        #expect(!comparison.isEqual)
+        #expect(comparison.isEqual)
+    }
+
+    @Test func booleanAttributeSpellingIsNotSemanticallySignificant() {
+        let comparison = DOMComparator.compare(
+            actualHTML: #"<input disabled="implementation-spelling">"#,
+            expectedHTML: #"<input disabled>"#
+        )
+
+        #expect(comparison.isEqual)
+    }
+
+    @Test func attributeNormalizationPreservesMeaningfulNonBooleanStates() {
+        #expect(DOMComparator.compare(
+            actualHTML: #"<video playsinline="implementation-spelling"></video>"#,
+            expectedHTML: "<video playsinline></video>"
+        ).isEqual)
+        #expect(!DOMComparator.compare(
+            actualHTML: #"<div enabled="one"></div>"#,
+            expectedHTML: #"<div enabled="two"></div>"#
+        ).isEqual)
+        #expect(!DOMComparator.compare(
+            actualHTML: #"<div hidden="until-found"></div>"#,
+            expectedHTML: "<div hidden></div>"
+        ).isEqual)
     }
 
     @Test func validUnicodeAttributeNamesAreCompared() {

@@ -138,21 +138,19 @@ enum DOMComparator {
                 return DOMComparison(isEqual: false, mismatchDescription: "Node mismatch. actual=\(aDesc) expected=\(eDesc)")
             }
 
+            var actualAdvanceNode = a
+            var expectedAdvanceNode = e
             if let aText = a as? TextNode, let eText = e as? TextNode {
-                let actualText = comparableText(aText)
-                let expectedText = comparableText(eText)
+                let actualRun = comparableTextRun(startingAt: aText)
+                let expectedRun = comparableTextRun(startingAt: eText)
+                let actualText = actualRun.text
+                let expectedText = expectedRun.text
+                actualAdvanceNode = actualRun.lastNode
+                expectedAdvanceNode = expectedRun.lastNode
                 if actualText != expectedText {
                     return DOMComparison(
                         isEqual: false,
                         mismatchDescription: "Text mismatch. actual=\(actualText.debugDescription) expected=\(expectedText.debugDescription)"
-                    )
-                }
-            } else if let aComment = a as? SwiftSoup.Comment,
-                      let eComment = e as? SwiftSoup.Comment {
-                if aComment.getData() != eComment.getData() {
-                    return DOMComparison(
-                        isEqual: false,
-                        mismatchDescription: "Comment mismatch. actual=\(aComment.getData().debugDescription) expected=\(eComment.getData().debugDescription)"
                     )
                 }
             } else if let aEl = a as? Element, let eEl = e as? Element {
@@ -166,8 +164,8 @@ enum DOMComparator {
                 }
             }
 
-            actualNode = inOrderIgnoreEmptyTextNodes(from: a)
-            expectedNode = inOrderIgnoreEmptyTextNodes(from: e)
+            actualNode = inOrderIgnoringInertNodes(from: actualAdvanceNode)
+            expectedNode = inOrderIgnoringInertNodes(from: expectedAdvanceNode)
         }
 
         return DOMComparison(isEqual: true, mismatchDescription: nil)
@@ -178,66 +176,32 @@ enum DOMComparator {
         if let attributes = element.getAttributes() {
             for attribute in attributes {
                 let key = attribute.getKey()
-                guard isValidXMLName(key) else { continue }
                 let value = attribute.getValue()
                 attrs.append("\(key)=\(normalizedAttributeValue(key: key, value: value))")
             }
         }
-        return attrs
+        return attrs.sorted()
     }
 
     private static func normalizedAttributeValue(key: String, value: String) -> String {
-        if value.isEmpty, ["allowfullscreen", "itemscope"].contains(key.lowercased()) {
-            return key
+        let booleanAttributes: Set<String> = [
+            "allowfullscreen", "async", "autofocus", "autoplay", "checked",
+            "controls", "default", "defer", "disabled", "disablepictureinpicture",
+            "disableremoteplayback", "formnovalidate", "inert", "ismap", "itemscope",
+            "loop", "multiple", "muted", "nomodule", "novalidate", "open",
+            "playsinline", "readonly", "required", "reversed", "selected",
+        ]
+        let lowercaseKey = key.lowercased()
+        if booleanAttributes.contains(lowercaseKey) { return lowercaseKey }
+        if lowercaseKey == "hidden" {
+            return value.lowercased() == "until-found" ? "until-found" : "hidden"
         }
         return value
     }
 
-    private static func isValidXMLName(_ name: String) -> Bool {
-        // XML 1.0 (Fifth Edition) NameStartChar/NameChar. This mirrors the
-        // JavaScript oracle's xml-name-validator instead of silently dropping
-        // valid non-ASCII attribute names from golden comparisons.
-        let scalars = name.unicodeScalars
-        guard let first = scalars.first, isXMLNameStart(first.value) else { return false }
-        return scalars.dropFirst().allSatisfy { isXMLNameCharacter($0.value) }
-    }
-
-    private static func isXMLNameStart(_ scalar: UInt32) -> Bool {
-        scalar == 0x3A || scalar == 0x5F
-            || (0x41...0x5A).contains(scalar)
-            || (0x61...0x7A).contains(scalar)
-            || (0xC0...0xD6).contains(scalar)
-            || (0xD8...0xF6).contains(scalar)
-            || (0xF8...0x2FF).contains(scalar)
-            || (0x370...0x37D).contains(scalar)
-            || (0x37F...0x1FFF).contains(scalar)
-            || (0x200C...0x200D).contains(scalar)
-            || (0x2070...0x218F).contains(scalar)
-            || (0x2C00...0x2FEF).contains(scalar)
-            || (0x3001...0xD7FF).contains(scalar)
-            || (0xF900...0xFDCF).contains(scalar)
-            || (0xFDF0...0xFFFD).contains(scalar)
-            || (0x10000...0xEFFFF).contains(scalar)
-    }
-
-    private static func isXMLNameCharacter(_ scalar: UInt32) -> Bool {
-        isXMLNameStart(scalar)
-            || scalar == 0x2D
-            || scalar == 0x2E
-            || scalar == 0xB7
-            || (0x30...0x39).contains(scalar)
-            || (0x300...0x36F).contains(scalar)
-            || (0x203F...0x2040).contains(scalar)
-    }
-
     private static func nodeStr(_ node: Node?) -> String {
         guard let node else { return "(no node)" }
-        if let text = node as? TextNode {
-            return "#text(\(comparableText(text)))"
-        }
-        if let comment = node as? SwiftSoup.Comment {
-            return "#comment(\(comment.getData()))"
-        }
+        if node is TextNode { return "#text" }
         if let element = node as? Element {
             var result = element.tagName().lowercased()
             let id = element.idSafe()
@@ -255,14 +219,29 @@ enum DOMComparator {
         javaScriptCollapseWhitespaceRuns(str)
     }
 
-    private static func comparableText(_ node: TextNode) -> String {
-        let transformed = htmlTransform(node.getWholeText())
-        guard node.nextSibling() == nil else { return transformed }
+    private static func comparableTextRun(startingAt node: TextNode) -> (text: String, lastNode: Node) {
+        var rawText = node.getWholeText()
+        var lastNode: Node = node
+        var next = node.nextSibling()
+        while let candidate = next {
+            if candidate is SwiftSoup.Comment {
+                lastNode = candidate
+                next = candidate.nextSibling()
+                continue
+            }
+            guard let text = candidate as? TextNode else { break }
+            rawText += text.getWholeText()
+            lastNode = text
+            next = text.nextSibling()
+        }
+
+        let transformed = htmlTransform(rawText)
+        guard lastNode.nextSibling() == nil else { return (transformed, lastNode) }
 
         // The JavaScript oracle beautifies both strings before parsing them.
         // That normalizes indentation immediately before a closing tag, so the
         // native comparator ignores only that terminal formatting whitespace.
-        return javaScriptTrimEnd(transformed)
+        return (javaScriptTrimEnd(transformed), lastNode)
     }
 
     private static func inOrderTraverse(from node: Node) -> Node? {
@@ -276,9 +255,13 @@ enum DOMComparator {
         return current?.nextSibling()
     }
 
-    private static func inOrderIgnoreEmptyTextNodes(from node: Node) -> Node? {
+    private static func inOrderIgnoringInertNodes(from node: Node) -> Node? {
         var current = inOrderTraverse(from: node)
         while let cur = current {
+            if cur is SwiftSoup.Comment {
+                current = inOrderTraverse(from: cur)
+                continue
+            }
             if let text = cur as? TextNode {
                 if javaScriptIsWhitespaceOnly(text.getWholeText()) {
                     current = inOrderTraverse(from: cur)

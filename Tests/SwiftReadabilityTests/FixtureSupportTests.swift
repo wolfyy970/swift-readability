@@ -9,81 +9,21 @@ struct FixtureSupportTests {
         #expect(fixtures.count == 136)
         #expect(fixtures.filter { $0.expectedHTML != nil }.count == 131)
         #expect(fixtures.filter { $0.expectedMetadata != nil }.count == 133)
-        #expect(fixtures.filter { $0.expectedHTMLSource == .rawInputOracleOverlay }.count == 33)
-        #expect(fixtures.filter { $0.expectedHTMLSource == .legacyFixtureSnapshot }.count == 98)
-        #expect(
-            fixtures
-                .filter { $0.expectedHTMLSource == .rawInputOracleOverlay }
-                .allSatisfy { $0.extensionProfile == nil }
-        )
         #expect(Set(fixtures.map(\.name)).count == fixtures.count)
     }
 
-    @Test func rawInputOverlayIsPreferredWithoutChangingFixtureBytes() throws {
+    @Test func sourceAndExpectedSnapshotBytesAreLoadedUnchanged() throws {
         let repository = try temporaryRepository()
-        let directory = try createFixtureDirectory(named: "raw-overlay", in: repository.rootURL)
+        let directory = try createFixtureDirectory(named: "byte-preservation", in: repository.rootURL)
         let source = "\u{FEFF}<article>Exact source</article>\r\n\u{200B}"
-        let rawExpected = "<div><!-- retained --><p>Raw input</p></div>\n"
+        let expected = "<div><p>Upstream snapshot</p></div>\n"
         try Data(source.utf8).write(to: directory.appendingPathComponent("source.html"))
-        try "<div><p>Legacy</p></div>\n".write(
-            to: directory.appendingPathComponent("expected.html"),
-            atomically: true,
-            encoding: .utf8
-        )
-        try Data(rawExpected.utf8).write(
-            to: directory.appendingPathComponent("expected-raw-input.html")
-        )
+        try Data(expected.utf8).write(to: directory.appendingPathComponent("expected.html"))
 
         let fixture = try repository.load(selection: .all).first
 
         #expect(Data(fixture?.source.utf8 ?? "".utf8) == Data(source.utf8))
-        #expect(Data(fixture?.expectedHTML?.utf8 ?? "".utf8) == Data(rawExpected.utf8))
-        #expect(fixture?.expectedHTMLSource == .rawInputOracleOverlay)
-    }
-
-    @Test func rawInputOverlayRequiresLegacySnapshot() throws {
-        let repository = try temporaryRepository()
-        let directory = try createFixtureDirectory(named: "orphan-overlay", in: repository.rootURL)
-        try "<article>Source</article>".write(
-            to: directory.appendingPathComponent("source.html"),
-            atomically: true,
-            encoding: .utf8
-        )
-        try "<div><!-- retained --><p>Raw input</p></div>".write(
-            to: directory.appendingPathComponent("expected-raw-input.html"),
-            atomically: true,
-            encoding: .utf8
-        )
-
-        let message = capturedError {
-            try repository.load(selection: .all)
-        }
-
-        #expect(message == "Raw-input expected HTML for fixture orphan-overlay requires a legacy expected.html")
-    }
-
-    @Test func rawInputOverlayCannotDescribeAnExtensionProfile() throws {
-        let repository = try temporaryRepository(
-            manifest: #"{"baseURL":"https://example.com/article","extensionProfiles":{"extension-overlay":"publisherAdaptations"},"knownFailures":[]}"#
-        )
-        let directory = try createFixtureDirectory(named: "extension-overlay", in: repository.rootURL)
-        for (name, value) in [
-            ("source.html", "<article>Source</article>"),
-            ("expected.html", "<div><p>Legacy</p></div>"),
-            ("expected-raw-input.html", "<div><!-- retained --><p>Raw input</p></div>"),
-        ] {
-            try value.write(
-                to: directory.appendingPathComponent(name),
-                atomically: true,
-                encoding: .utf8
-            )
-        }
-
-        let message = capturedError {
-            try repository.load(selection: .all)
-        }
-
-        #expect(message == "Raw-input Mozilla expected HTML is invalid for extension fixture extension-overlay")
+        #expect(Data(fixture?.expectedHTML?.utf8 ?? "".utf8) == Data(expected.utf8))
     }
 
     @Test func exactSelectionRejectsUnknownFixtureNames() {

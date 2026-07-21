@@ -4,7 +4,10 @@
 import Foundation
 import SwiftSoup
 
-/// Basic sanitization before extraction.
+/// Mozilla-compatible DOM normalization before extraction.
+///
+/// This processor removes or rewrites nodes for article selection; it is not
+/// an HTML sanitizer and must not be used as a rendering security boundary.
 final class Preprocessor: ProcessorBase {
     private let regEx: RegExUtil
     private let extensions: ReadabilityExtensions

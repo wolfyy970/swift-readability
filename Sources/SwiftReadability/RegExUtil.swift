@@ -25,8 +25,6 @@ final class RegExUtil {
 
     static let whitespaceDefaultPattern = "^\\s*$"
 
-    static let hasContentDefaultPattern = "\\S$"
-
     private let unlikelyCandidates: NSRegularExpression
     private let okMaybeItsACandidate: NSRegularExpression
     private let positive: NSRegularExpression
@@ -35,11 +33,9 @@ final class RegExUtil {
     private let normalize: NSRegularExpression
     private let videos: NSRegularExpression
     private let whitespace: NSRegularExpression
-    private let hasContent: NSRegularExpression
     private let videoUsesMozillaIgnoreCaseSemantics: Bool
     private let usesMozillaNormalizeSemantics: Bool
     private let usesMozillaWhitespaceSemantics: Bool
-    private let usesMozillaHasContentSemantics: Bool
 
     convenience init(options: ReadabilityOptions) {
         let publisherCleanup = options.extensions.contains(.publisherChromeCleanup)
@@ -62,8 +58,7 @@ final class RegExUtil {
          normalizePattern: String = normalizeDefaultPattern,
          videosPattern: String = videosDefaultPattern,
          allowedVideoRegex: NSRegularExpression? = nil,
-         whitespacePattern: String = whitespaceDefaultPattern,
-         hasContentPattern: String = hasContentDefaultPattern) {
+         whitespacePattern: String = whitespaceDefaultPattern) {
         func re(_ pattern: String, options: NSRegularExpression.Options = [.caseInsensitive]) -> NSRegularExpression {
             return try! NSRegularExpression(pattern: pattern, options: options)
         }
@@ -74,12 +69,13 @@ final class RegExUtil {
         byline = re(bylinePattern)
         normalize = re(normalizePattern, options: [])
         videos = allowedVideoRegex ?? re(videosPattern)
+        // The package-owned default mirrors Mozilla's legacy `/i` behavior.
+        // A caller-supplied NSRegularExpression intentionally keeps Foundation
+        // semantics instead of growing a second regular-expression engine here.
         videoUsesMozillaIgnoreCaseSemantics = allowedVideoRegex == nil
         whitespace = re(whitespacePattern, options: [])
-        hasContent = re(hasContentPattern, options: [])
         usesMozillaNormalizeSemantics = normalizePattern == Self.normalizeDefaultPattern
         usesMozillaWhitespaceSemantics = whitespacePattern == Self.whitespaceDefaultPattern
-        usesMozillaHasContentSemantics = hasContentPattern == Self.hasContentDefaultPattern
     }
 
     private func matches(
@@ -102,11 +98,6 @@ final class RegExUtil {
     func isUnlikelyCandidate(_ s: String) -> Bool { matches(unlikelyCandidates, in: s) }
     func okMaybeItsACandidate(_ s: String) -> Bool { matches(okMaybeItsACandidate, in: s) }
     func isByline(_ s: String) -> Bool { matches(byline, in: s) }
-    func hasContent(_ s: String) -> Bool {
-        usesMozillaHasContentSemantics
-            ? javaScriptHasTrailingNonWhitespace(s)
-            : matches(hasContent, in: s, legacyIgnoreCase: false)
-    }
     func isWhitespace(_ s: String) -> Bool {
         usesMozillaWhitespaceSemantics
             ? javaScriptIsWhitespaceOnly(s)

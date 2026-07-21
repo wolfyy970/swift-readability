@@ -6,6 +6,7 @@ const assert = require("node:assert/strict");
 const { describe, it } = require("node:test");
 const { JSDOM, VirtualConsole } = require("jsdom");
 const { assertDOMEqual } = require("../support/dom-comparator");
+const { removeDOMComments } = require("../support/remove-dom-comments");
 
 const readabilityPath = process.env.READABILITY_JS_PATH
   ? path.resolve(process.env.READABILITY_JS_PATH)
@@ -116,22 +117,14 @@ function loadFixtures() {
       const dir = path.join(fixtureRoot, name);
       const sourcePath = path.join(dir, "source.html");
       const expectedPath = path.join(dir, "expected.html");
-      const rawInputExpectedPath = path.join(dir, "expected-raw-input.html");
       const metadataPath = path.join(dir, "expected-metadata.json");
       assert.ok(fs.existsSync(sourcePath), `Missing source.html for fixture ${name}`);
       return {
         name,
         source: fs.readFileSync(sourcePath, "utf8"),
-        expectedHTML: fs.existsSync(rawInputExpectedPath)
-          ? fs.readFileSync(rawInputExpectedPath, "utf8")
-          : fs.existsSync(expectedPath)
-            ? fs.readFileSync(expectedPath, "utf8")
+        expectedHTML: fs.existsSync(expectedPath)
+          ? fs.readFileSync(expectedPath, "utf8")
           : null,
-        expectedHTMLSource: fs.existsSync(rawInputExpectedPath)
-          ? "raw-input-oracle-overlay"
-          : fs.existsSync(expectedPath)
-            ? "legacy-fixture-snapshot"
-            : null,
         expectedMetadata: fs.existsSync(metadataPath)
           ? JSON.parse(fs.readFileSync(metadataPath, "utf8"))
           : null,
@@ -161,6 +154,8 @@ describe("Readability.js fixture parity", { timeout: 30000 }, function () {
         virtualConsole: quietVirtualConsole,
       });
       try {
+        removeDOMComments(dom.window.document);
+
         if (!fixture.extensionProfile && fixture.expectedMetadata?.readerable != null) {
           assert.equal(
             isProbablyReaderable(dom.window.document),
@@ -218,7 +213,7 @@ describe("Readability.js fixture parity", { timeout: 30000 }, function () {
           assertDOMEqual(
             result.content,
             fixture.expectedHTML,
-            `${fixture.name} (${fixture.expectedHTMLSource})`
+            fixture.name
           );
         }
       } finally {

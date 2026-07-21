@@ -127,23 +127,31 @@ struct PostprocessorURLResolutionTests {
         )
     }
 
-    @Test func preservesMozillaAttributeTruthinessAndJavascriptPrefixRules() throws {
+    @Test func preservesAttributeTruthinessAndRemovesResolvedJavascriptLinks() throws {
         let article = try postprocessedArticle(
             body: """
             <a id="whitespace" href="   ">Whitespace</a>
             <a id="leading-javascript" href=" javascript:alert(1)">Leading</a>
             <a id="uppercase-javascript" href="JavaScript:alert(2)">Uppercase</a>
+            <a id="control-javascript" href="&#9;&#10;jAvAsCrIpT:alert(3)"><strong>Control-prefixed</strong></a>
             <a id="exact-javascript" href="javascript:alert(3)">Removed link text</a>
+            <a id="safe-lookalike" href="./javascript:notes">Safe relative link</a>
             """
         )
 
         // JavaScript considers a whitespace-only attribute truthy; the URL parser
         // then treats it as an empty reference and removes the base fragment.
         #expect(try attribute("href", of: "#whitespace", in: article) == "https://example.com/a/b/index.html?old=1")
-        // Readability removes only a raw, case-sensitive `javascript:` prefix.
-        #expect(try attribute("href", of: "#leading-javascript", in: article) == "javascript:alert(1)")
-        #expect(try attribute("href", of: "#uppercase-javascript", in: article) == "javascript:alert(2)")
+        // Link cleanup follows the resolved URL scheme rather than a raw,
+        // case-sensitive prefix. This removes executable links browsers accept.
+        #expect(try article.select("#leading-javascript").isEmpty())
+        #expect(try article.select("#uppercase-javascript").isEmpty())
+        #expect(try article.select("#control-javascript").isEmpty())
         #expect(try article.select("#exact-javascript").isEmpty())
+        #expect(try attribute("href", of: "#safe-lookalike", in: article) == "https://example.com/a/b/javascript:notes")
+        #expect(try article.text().contains("Leading"))
+        #expect(try article.text().contains("Uppercase"))
+        #expect(try article.text().contains("Control-prefixed"))
         #expect(try article.text().contains("Removed link text"))
     }
 
@@ -196,21 +204,18 @@ struct PostprocessorURLResolutionTests {
         #expect(try outer.select("#inner").first() != nil)
     }
 
-    // Mozilla's helper is the unusual `/\S$/`, not an ordinary "contains
-    // non-whitespace" test. A text node ending in whitespace therefore does
-    // not prevent its sole nested DIV/SECTION from replacing the parent.
-    @Test func nestedSimplificationUsesMozillasTrailingContentTest() throws {
+    @Test func nestedSimplificationPreservesDirectProseEvenWhenItEndsInWhitespace() throws {
         let article = try postprocessedArticle(
             body: """
             <section id="outer" data-parent="kept">prefix <div id="inner"><p>Editorial text.</p></div></section>
             """
         )
 
-        let replacement = try #require(article.select("#outer").first())
-        #expect(replacement.tagName() == "div")
-        #expect(try replacement.attr("data-parent") == "kept")
-        #expect(try article.select("#inner").isEmpty())
-        #expect(try !article.text().contains("prefix"))
+        let outer = try #require(article.select("#outer").first())
+        #expect(outer.tagName() == "section")
+        #expect(try outer.attr("data-parent") == "kept")
+        #expect(try outer.select("#inner").first() != nil)
+        #expect(try article.text().contains("prefix"))
     }
 
     @Test func classCleaningPreservesDuplicatesAndUsesECMAScriptWhitespace() throws {

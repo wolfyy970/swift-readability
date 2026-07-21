@@ -78,7 +78,7 @@ public final class Readability {
         options: [.caseInsensitive]
     )
     private let html: String
-    private let url: URL
+    private let documentURI: String
     private let options: ReadabilityOptions
     private let document: Document?
 
@@ -96,15 +96,15 @@ public final class Readability {
     /// Creates an extractor from an HTML snapshot and the URL used to resolve relative links.
     public init(html: String, url: URL, options: ReadabilityOptions = ReadabilityOptions()) {
         self.html = html
-        self.url = url
+        self.documentURI = url.absoluteString
         self.options = options
         self.regEx = RegExUtil(options: options)
         self.document = nil
     }
 
-    private init(html: String, url: URL, document: Document?, options: ReadabilityOptions) {
+    private init(html: String, documentURI: String, document: Document?, options: ReadabilityOptions) {
         self.html = html
-        self.url = url
+        self.documentURI = documentURI
         self.options = options
         self.regEx = RegExUtil(options: options)
         self.document = document
@@ -113,8 +113,12 @@ public final class Readability {
     /// Creates an extractor that mutates the supplied SwiftSoup document in place.
     public convenience init(document: Document, options: ReadabilityOptions = ReadabilityOptions()) {
         let baseUri = document.location()
-        let resolvedURL = URL(string: baseUri) ?? URL(string: "about:blank")!
-        self.init(html: "", url: resolvedURL, document: document, options: options)
+        self.init(
+            html: "",
+            documentURI: baseUri.isEmpty ? "about:blank" : baseUri,
+            document: document,
+            options: options
+        )
     }
 
     /// Runs the full extraction pipeline, returning `nil` when no article can be selected.
@@ -220,8 +224,11 @@ public final class Readability {
     /// Runs extraction and projects the detached article element into an arbitrary content type.
     public func parse<Content>(serializer: (Element) -> Content) throws -> ReadabilitySerializedResult<Content>? {
         guard let parsed = try parseArticle() else { return nil }
-        let content = serializer(parsed.articleContent)
+        // Mozilla captures these observable fields before invoking its serializer,
+        // which is allowed to return or mutate the article element. Keep the
+        // generic Swift projection from changing the rest of its own result.
         let textContent = textContentPreservingWhitespace(of: parsed.articleContent)
+        let content = serializer(parsed.articleContent)
         return ReadabilitySerializedResult(
             title: parsed.metadata.title,
             byline: parsed.metadata.byline ?? parsed.articleByline,
@@ -296,20 +303,47 @@ public final class Readability {
         // Port of Readability-readerable.js
         let minScore = options.minScore
         let minContentLength = options.minContentLength
+        let documentUsesHTMLSyntax = doc.outputSettings().syntax() == .html
+        let contentNamespaces = ArticleContentNamespaceResolver()
 
-        var nodes: [Element] = (try? doc.select("p, pre, article").array()) ?? []
+        // Build the two browser query result sets in one nonmutating traversal,
+        // stopping at HTML template fragments that querySelectorAll cannot see.
+        var nodes: [Element] = []
+        var breakParents: [Element] = []
+        var stack = Array(doc.getChildNodes().reversed())
+        while let node = stack.popLast() {
+            if let element = node as? Element {
+                if isHTMLTemplateElement(
+                    element,
+                    documentUsesHTMLSyntax: documentUsesHTMLSyntax,
+                    namespaces: contentNamespaces
+                ) {
+                    continue
+                }
 
-        if let brNodes = try? doc.select("div > br"), brNodes.count > 0 {
-            // JavaScript's Set retains insertion order: the querySelectorAll
-            // results remain first, followed by previously unseen <br> parents
-            // in document order. A Swift Dictionary does not provide that API
-            // contract, and made visibility callbacks observably nondeterministic.
-            var seen = Set(nodes.map(ObjectIdentifier.init))
-            for br in brNodes {
-                if let parent = br.parent(), seen.insert(ObjectIdentifier(parent)).inserted {
-                    nodes.append(parent)
+                let tag = element.tagNameUTF8()
+                if tag == ReadabilityUTF8Arrays.p ||
+                    tag == ReadabilityUTF8Arrays.pre ||
+                    tag == ReadabilityUTF8Arrays.article {
+                    nodes.append(element)
+                } else if tag == ReadabilityUTF8Arrays.br,
+                          let parent = element.parent(),
+                          parent.tagNameUTF8() == ReadabilityUTF8Arrays.div {
+                    breakParents.append(parent)
                 }
             }
+
+            let children = node.getChildNodes()
+            if !children.isEmpty {
+                stack.append(contentsOf: children.reversed())
+            }
+        }
+
+        // JavaScript's Set retains insertion order: primary candidates remain
+        // first, followed by previously unseen <br> parents in document order.
+        var seen = Set(nodes.map(ObjectIdentifier.init))
+        for parent in breakParents where seen.insert(ObjectIdentifier(parent)).inserted {
+            nodes.append(parent)
         }
 
         let unlikelyCandidates = Readability.unlikelyCandidatesRegex
@@ -327,14 +361,15 @@ public final class Readability {
         func defaultVisibilityChecker(_ node: Element) -> Bool {
             let styleBytes = node.attrOrEmptyUTF8(ReadabilityUTF8Arrays.style)
             let style = String(decoding: styleBytes, as: UTF8.self)
-            if browserDOMExposesStyleProperty(node), !style.isEmpty,
+            if !style.isEmpty,
                InlineStyleDeclarations(style).value(for: "display") == "none" {
                 return false
             }
             if node.hasAttr(ReadabilityUTF8Arrays.hidden) { return false }
             if node.hasAttr(ReadabilityUTF8Arrays.ariaHidden),
-               node.attrOrEmptyUTF8(ReadabilityUTF8Arrays.ariaHidden) == ReadabilityUTF8Arrays.true_ {
-                if !browserDOMClassNameIncludes(node, "fallback-image") { return false }
+               node.attrOrEmptyUTF8(ReadabilityUTF8Arrays.ariaHidden)
+                .equalsIgnoreCaseASCII(ReadabilityUTF8Arrays.true_) {
+                if !node.classNameSafe().contains("fallback-image") { return false }
             }
             return true
         }
@@ -354,7 +389,8 @@ public final class Readability {
         for node in nodes {
             if !isVisible(node) { continue }
 
-            let matchString = node.classNameSafe() + " " + node.idSafe()
+            let scoringSignals = contentNamespaces.scoringSignals(node)
+            let matchString = scoringSignals.className + " " + scoringSignals.id
             if matches(unlikelyCandidates, matchString), !matches(okMaybeItsACandidate, matchString) {
                 continue
             }
@@ -367,12 +403,13 @@ public final class Readability {
             if trimmedText.utf8.count < minContentLength { continue }
             let textLength = javaScriptStringLength(trimmedText)
             if textLength < minContentLength { continue }
-            score += sqrt(Double(textLength - minContentLength))
+            // Convert before subtracting so the public Int domain cannot trap at
+            // Int.min. JavaScript performs this arithmetic in Number space.
+            score += sqrt(Double(textLength) - Double(minContentLength))
             if score > minScore { return true }
         }
         return false
     }
-
 }
 
 private extension Readability {
@@ -399,29 +436,32 @@ private extension Readability {
             isLiveDocument = true
         } else {
             document = try measured("parseDocument", by: timing) {
-                try SwiftSoup.parse(html, url.absoluteString)
+                try SwiftSoup.parse(html, documentURI)
             }
             isLiveDocument = false
         }
-        let readerable = measured("readerable", by: timing) {
-            Readability.isProbablyReaderable(doc: document)
-        }
 
         if options.maxElemsToParse > 0 {
-            // Browser `getElementsByTagName("*")` counts elements, not the
-            // Document node. SwiftSoup's `getAllElements()` includes its root.
-            let numTags: Int
-            if let allNodes = try? document.select("*") {
-                numTags = allNodes.reduce(into: 0) { count, element in
-                    if element !== document { count += 1 }
-                }
-            } else {
-                numTags = 0
-            }
+            let numTags = browserStyleElementCount(in: document)
             if numTags > options.maxElemsToParse {
                 let message = "Aborting parsing document; " + String(numTags) + " elements found"
                 throw NSError(domain: "Readability", code: 1, userInfo: [NSLocalizedDescriptionKey: message])
             }
+        }
+
+        // HTML template payloads are inert reader data. Dropping them keeps
+        // every later selector, metadata lookup, and URL rewrite on the same
+        // reader-visible tree without emulating browser DocumentFragments.
+        try removeHTMLTemplateElements(from: document)
+
+        // Source comments are inert reader-facing data, but leaving them in the
+        // tree can split otherwise continuous phrasing content into artificial
+        // structural fragments. Normalize only real Comment nodes; raw text in
+        // script, style, and JSON-LD elements remains intact.
+        try removeInertDOMComments(from: document)
+
+        let readerable = measured("readerable", by: timing) {
+            Readability.isProbablyReaderable(doc: document)
         }
 
         let metadata = measured("metadata", by: timing) {
@@ -435,7 +475,7 @@ private extension Readability {
             articleGrabber.grabArticle(
                 doc: document,
                 metadata: metadata,
-                documentURI: url.absoluteString,
+                documentURI: documentURI,
                 timing: timing
             )
         }
@@ -445,7 +485,7 @@ private extension Readability {
             postprocessor.postProcessContent(
                 originalDocument: document,
                 articleContent: articleContent,
-                articleUri: url.absoluteString,
+                articleUri: documentURI,
                 keepClasses: options.keepClasses,
                 classesToPreserve: options.classesToPreserve
             )
@@ -496,23 +536,16 @@ extension Readability {
         let isXmlInput = document.outputSettings().syntax() == .xml
         let effectiveUseXMLSerializer = useXMLSerializer && isXmlInput
         guard effectiveUseXMLSerializer else {
-            return MozillaHTMLSerializer.innerHTML(of: articleContent)
+            return ArticleHTMLSerializer.innerHTML(of: articleContent)
         }
 
-        let sourceXML: String
-        if !html.isEmpty {
-            sourceXML = html
-        } else {
-            sourceXML = (try? document.outerHtml()) ?? ""
-        }
         let needsSerializationDoc = articleContent.ownerDocument() == nil
         if !isLiveDocument || needsSerializationDoc {
-            normalizeBooleanAttributes(in: articleContent, sourceXML: sourceXML)
-            let serializationDoc = try! SwiftSoup.parse("", url.absoluteString, Parser.xmlParser())
+            let serializationDoc = try! SwiftSoup.parse("", documentURI, Parser.xmlParser())
             let outputSettings = serializationDoc.outputSettings()
             outputSettings.prettyPrint(pretty: false)
             outputSettings.syntax(syntax: .xml)
-            _ = try? serializationDoc.body()?.appendChild(articleContent)
+            _ = try? serializationDoc.appendChild(articleContent)
             return (try? articleContent.html()) ?? ""
         }
 
@@ -521,129 +554,10 @@ extension Readability {
         let originalSyntax = outputSettings.syntax()
         outputSettings.prettyPrint(pretty: false)
         outputSettings.syntax(syntax: .xml)
-        normalizeBooleanAttributes(in: articleContent, sourceXML: sourceXML)
         let html = (try? articleContent.html()) ?? ""
         outputSettings.prettyPrint(pretty: originalPrettyPrint)
         outputSettings.syntax(syntax: originalSyntax)
         return html
-    }
-
-    /// Recovers canonical values that SwiftSoup may erase while moving XML nodes.
-    ///
-    /// This is a Swift-only XML serialization safeguard, not a translation of
-    /// Mozilla Readability logic. Parsing the source as XML is intentional: XML
-    /// recognizes only its four `S` characters around attributes. Foundation's
-    /// ICU `\s` also accepts U+0085 and rejects characters accepted by ECMAScript,
-    /// so a regular-expression reconstruction cannot model either XML or HTML.
-    func normalizeBooleanAttributes(in root: Element, sourceXML: String) {
-        guard !sourceXML.isEmpty else { return }
-        guard let sourceDocument = try? SwiftSoup.parse(sourceXML, url.absoluteString, Parser.xmlParser()),
-              let sourceElements = try? sourceDocument.getAllElements() else {
-            return
-        }
-        let booleanAttrs: Set<String> = [
-            "allowfullscreen",
-            "async",
-            "autofocus",
-            "autoplay",
-            "checked",
-            "controls",
-            "default",
-            "defer",
-            "disabled",
-            "formnovalidate",
-            "hidden",
-            "ismap",
-            "itemscope",
-            "loop",
-            "multiple",
-            "muted",
-            "novalidate",
-            "open",
-            "playsinline",
-            "readonly",
-            "required",
-            "reversed",
-            "selected",
-            "typemustmatch"
-        ]
-
-        guard let elements = try? root.getAllElements() else { return }
-        for element in elements {
-            guard let attributes = element.getAttributes()?.asList() else { continue }
-            for attr in attributes where attr.getValueUTF8().isEmpty {
-                let keyBytes = attr.getKeyUTF8()
-                let attrNameLower = String(decoding: keyBytes, as: UTF8.self).lowercased()
-                if !booleanAttrs.contains(attrNameLower) { continue }
-                if sourceElements.contains(where: {
-                    sourceElement($0, correspondsTo: element)
-                        && hasCanonicalBooleanAttribute($0, named: attrNameLower)
-                }) {
-                    _ = try? element.attr(attr.getKey(), attr.getKey())
-                }
-            }
-        }
-    }
-
-    private func sourceElement(_ source: Element, correspondsTo target: Element) -> Bool {
-        guard source.tagNameUTF8() == target.tagNameUTF8() else { return false }
-
-        let identifiers = [
-            ReadabilityUTF8Arrays.id,
-            "itemid".utf8Array,
-            ReadabilityUTF8Arrays.src,
-            "data-media-id".utf8Array,
-            "data-uuid".utf8Array,
-            "data-type".utf8Array,
-            "data-aop".utf8Array
-        ]
-        var targetHasIdentifier = false
-        for key in identifiers {
-            guard let targetValue = try? target.getAttributes()?.getIgnoreCase(key: key),
-                  !targetValue.isEmpty else { continue }
-            targetHasIdentifier = true
-            guard let sourceAttributes = source.getAttributes(),
-                  sourceAttributes.hasKeyIgnoreCase(key: key),
-                  let sourceValue = try? sourceAttributes.getIgnoreCase(key: key) else { continue }
-            if sourceValue == targetValue { return true }
-        }
-        if targetHasIdentifier { return false }
-
-        guard let targetAttributes = target.getAttributes(),
-              let sourceAttributes = source.getAttributes(),
-              targetAttributes.hasKeyIgnoreCase(key: "itemtype"),
-              targetAttributes.hasKeyIgnoreCase(key: ReadabilityUTF8Arrays.itemprop),
-              sourceAttributes.hasKeyIgnoreCase(key: "itemtype"),
-              sourceAttributes.hasKeyIgnoreCase(key: ReadabilityUTF8Arrays.itemprop),
-              let targetItemtype = try? targetAttributes.getIgnoreCase(key: "itemtype"),
-              let targetItemprop = try? targetAttributes.getIgnoreCase(key: ReadabilityUTF8Arrays.itemprop),
-              let sourceItemtype = try? sourceAttributes.getIgnoreCase(key: "itemtype"),
-              let sourceItemprop = try? sourceAttributes.getIgnoreCase(key: ReadabilityUTF8Arrays.itemprop) else {
-            return false
-        }
-        return !targetItemtype.isEmpty
-            && !targetItemprop.isEmpty
-            && sourceItemtype == targetItemtype
-            && sourceItemprop == targetItemprop
-    }
-
-    private func hasCanonicalBooleanAttribute(_ element: Element, named attributeName: String) -> Bool {
-        guard let attributes = element.getAttributes(),
-              attributes.hasKeyIgnoreCase(key: attributeName),
-              let value = try? attributes.getIgnoreCase(key: attributeName) else {
-            return false
-        }
-        return asciiCaseInsensitiveEqual(value.utf8Array, attributeName.utf8Array)
-    }
-
-    private func asciiCaseInsensitiveEqual(_ lhs: [UInt8], _ rhs: [UInt8]) -> Bool {
-        guard lhs.count == rhs.count else { return false }
-        for (left, right) in zip(lhs, rhs) {
-            let foldedLeft = left >= 65 && left <= 90 ? left + 32 : left
-            let foldedRight = right >= 65 && right <= 90 ? right + 32 : right
-            if foldedLeft != foldedRight { return false }
-        }
-        return true
     }
 }
 

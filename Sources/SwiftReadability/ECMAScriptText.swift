@@ -127,11 +127,6 @@ func javaScriptIsWhitespaceOnly(_ text: String) -> Bool {
     text.unicodeScalars.allSatisfy(javaScriptIsWhitespace(_:))
 }
 
-func javaScriptHasTrailingNonWhitespace(_ text: String) -> Bool {
-    guard let last = text.unicodeScalars.last else { return false }
-    return !javaScriptIsWhitespace(last)
-}
-
 /// Mirrors `String.prototype.trim()` using ECMAScript's WhiteSpace and
 /// LineTerminator productions.
 func javaScriptTrim(_ text: String) -> String {

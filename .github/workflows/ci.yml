@@ -25,6 +25,8 @@ jobs:
         run: swift --version
       - name: Native release tests with warnings as errors
         run: swift test -c release -Xswiftc -warnings-as-errors
+      - name: Contract executable release build with warnings as errors
+        run: swift build -c release --target SwiftReadabilityContract -Xswiftc -warnings-as-errors
 
   swift:
     name: Native, differential, and benchmark gates

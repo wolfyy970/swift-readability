@@ -94,6 +94,52 @@ struct ReaderableTests {
         #expect(Readability.isProbablyReaderable(document: doc, options: options) == false)
     }
 
+    @Test func minimumContentLengthSupportsTheEntireIntDomain() throws {
+        let doc = try makeDoc("<html><body><p>x</p></body></html>")
+        let options = Readability.ReaderableOptions(
+            minContentLength: .min,
+            minScore: Readability.ReaderableOptions().minScore
+        )
+
+        // JavaScript performs the score subtraction as floating-point Number
+        // arithmetic, so an extreme negative threshold is valid and readerable.
+        #expect(Readability.isProbablyReaderable(document: doc, options: options) == true)
+    }
+
+    @Test func mathMLFallbackImageClassRemainsReaderable() throws {
+        let prose = String(repeating: "x", count: 600)
+        let doc = try makeDoc(
+            "<html><body><math><article aria-hidden='true' class='fallback-image'>\(prose)</article></math></body></html>"
+        )
+
+        #expect(Readability.isProbablyReaderable(document: doc) == true)
+    }
+
+    @Test(arguments: [("TRUE", false), ("truthy", true)])
+    func ariaHiddenReaderabilityMatchesOnlyTheTrueToken(
+        value: String,
+        expected: Bool
+    ) throws {
+        let prose = String(repeating: "Substantial article prose. ", count: 30)
+        let document = try makeDoc(
+            "<html><body><article aria-hidden='\(value)'>\(prose)</article></body></html>"
+        )
+
+        #expect(Readability.isProbablyReaderable(document: document) == expected)
+    }
+
+    @Test(arguments: ["svg", "math"])
+    func foreignClassesDoNotSuppressReaderability(_ foreignTag: String) throws {
+        let prose = String(repeating: "x", count: 600)
+        let document = try makeDoc(
+            "<html><body><\(foreignTag)><article class='sidebar' id='diagram-label'>\(prose)</article></\(foreignTag)></body></html>"
+        )
+
+        // Diagram/formula styling hooks commonly use words such as `sidebar`
+        // and `menu`; they should not disqualify substantive readable content.
+        #expect(Readability.isProbablyReaderable(document: document) == true)
+    }
+
     @Test func divWithBreakCandidatesFollowMozillasSetInsertionOrder() throws {
         let doc = try makeDoc("""
         <html><body>

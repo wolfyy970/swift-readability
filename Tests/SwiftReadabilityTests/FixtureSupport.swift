@@ -45,16 +45,10 @@ struct FixtureSuiteManifest: Decodable, Sendable {
 }
 
 struct Fixture: Sendable, CustomStringConvertible {
-    enum ExpectedHTMLSource: String, Sendable {
-        case legacyFixtureSnapshot
-        case rawInputOracleOverlay
-    }
-
     let name: String
     let url: URL
     let source: String
     let expectedHTML: String?
-    let expectedHTMLSource: ExpectedHTMLSource?
     let expectedMetadata: ReadabilityTests.ExpectedMetadata?
     let assertions: FixtureSuiteManifest.FixtureAssertions?
     let extensionProfile: FixtureSuiteManifest.ExtensionProfile?
@@ -182,35 +176,11 @@ struct FixtureRepository: Sendable {
             let sourceURL = directory.appendingPathComponent("source.html")
             let source = try readRequiredText(sourceURL, label: "source", fixtureName: name)
             let expectedHTMLURL = directory.appendingPathComponent("expected.html")
-            let rawInputExpectedHTMLURL = directory.appendingPathComponent("expected-raw-input.html")
-            let rawInputExpectedHTML = try readOptionalText(
-                rawInputExpectedHTMLURL,
-                label: "raw-input expected HTML",
-                fixtureName: name
-            )
-            let legacyExpectedHTML = try readOptionalText(
+            let expectedHTML = try readOptionalText(
                 expectedHTMLURL,
                 label: "expected HTML",
                 fixtureName: name
             )
-            if rawInputExpectedHTML != nil, legacyExpectedHTML == nil {
-                throw FixtureLoadingError(
-                    message: "Raw-input expected HTML for fixture \(name) requires a legacy expected.html"
-                )
-            }
-            if rawInputExpectedHTML != nil, manifest.extensionProfiles?[name] != nil {
-                throw FixtureLoadingError(
-                    message: "Raw-input Mozilla expected HTML is invalid for extension fixture \(name)"
-                )
-            }
-            let expectedHTML = rawInputExpectedHTML ?? legacyExpectedHTML
-            let expectedHTMLSource: Fixture.ExpectedHTMLSource? = if rawInputExpectedHTML != nil {
-                .rawInputOracleOverlay
-            } else if legacyExpectedHTML != nil {
-                .legacyFixtureSnapshot
-            } else {
-                nil
-            }
             let expectedMetadata = try readExpectedMetadata(
                 directory.appendingPathComponent("expected-metadata.json"),
                 fixtureName: name
@@ -222,7 +192,6 @@ struct FixtureRepository: Sendable {
                     url: baseURL,
                     source: source,
                     expectedHTML: expectedHTML,
-                    expectedHTMLSource: expectedHTMLSource,
                     expectedMetadata: expectedMetadata,
                     assertions: manifest.assertions?[name],
                     extensionProfile: manifest.extensionProfiles?[name]

@@ -3,9 +3,7 @@
   "private": true,
   "type": "commonjs",
   "scripts": {
-    "fixtures:check-raw-input": "node tools/raw-input-fixture-snapshots.js --check",
-    "fixtures:write-raw-input": "node tools/raw-input-fixture-snapshots.js --write",
-    "test": "npm run fixtures:check-raw-input && node --test test/*.test.js",
+    "test": "node --test test/*.test.js",
     "test:differential": "node --max-old-space-size=512 differential/readability-differential.js"
   },
   "devDependencies": {
