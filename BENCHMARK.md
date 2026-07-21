@@ -30,7 +30,7 @@ regression benchmark.
 
 ## Current verification snapshot
 
-The checked release-candidate state has:
+Release 0.3.3 was verified with:
 
 - **136/136** frozen inputs with no detected Swift-versus-Mozilla semantic
   difference in default, extension-free mode;
@@ -42,9 +42,9 @@ The checked release-candidate state has:
 - no Swift Package Manager API break diagnosed against release 0.3.2; and
 - a deterministic one-fixture release benchmark smoke.
 
-These counts describe the current unreleased checkout and should be updated
-when the suites change. The full commands in [Contributing](CONTRIBUTING.md)
-are the release gates.
+These counts describe release 0.3.3 and should be updated when the suites
+change. The full commands in [Contributing](CONTRIBUTING.md) are the release
+gates.
 
 ## Corpus provenance
 
